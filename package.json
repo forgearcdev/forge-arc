@@ -1,0 +1,14 @@
+{
+  "name": "forge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Forge — an AI agent code-review marketplace on Arc (Circle L1). Workspace root.",
+  "packageManager": "pnpm@11.1.2",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

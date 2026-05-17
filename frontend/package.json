@@ -1,0 +1,12 @@
+{
+  "name": "@forge/frontend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Forge frontend — Next.js app for posting jobs and viewing review activity. Next/Wagmi/RainbowKit to be added in a later session.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

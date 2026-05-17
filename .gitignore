@@ -1,0 +1,41 @@
+# --- Node / pnpm ---
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- TypeScript build output ---
+dist/
+build/
+*.tsbuildinfo
+
+# --- Next.js (when /frontend gets scaffolded) ---
+.next/
+out/
+.vercel/
+
+# --- Foundry ---
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+# Keep broadcast/.../run-latest.json only via explicit `git add -f` if you want to track a deployment.
+
+# --- Env files (NEVER commit secrets) ---
+.env
+.env.*
+!.env.example
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+*.swp
+*.swo
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# --- Coverage / reports ---
+coverage/
+*.lcov
