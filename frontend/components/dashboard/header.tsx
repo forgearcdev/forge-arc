@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import type { Section } from "@/app/page";
 import { Search, Calendar } from "lucide-react";
 import { useState } from "react";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
 
 interface HeaderProps {
   activeSection: Section;
@@ -57,10 +58,93 @@ export function Header({ activeSection }: HeaderProps) {
           <span className="text-sm font-mono text-muted-foreground">arc testnet</span>
         </div>
 
-        {/* Connect Wallet button */}
-        <button className="px-4 py-2 rounded-lg border-2 border-accent text-accent text-sm font-medium hover:bg-accent/10 transition-all duration-200">
-          Connect Wallet
-        </button>
+        {/* Connect Wallet — RainbowKit ConnectButton with full styling control.
+            ConnectButton.Custom is the headless API: we get the open*Modal
+            callbacks + the live account/chain state, and we render whatever
+            UI we want. The `mounted` flag guards against SSR-mismatch by
+            hiding the button until after client hydration. */}
+        <ConnectButton.Custom>
+          {({
+            account,
+            chain,
+            openAccountModal,
+            openChainModal,
+            openConnectModal,
+            mounted,
+          }) => {
+            const ready = mounted;
+            const connected = ready && account && chain;
+
+            return (
+              <div
+                {...(!ready && {
+                  "aria-hidden": true,
+                  style: {
+                    opacity: 0,
+                    pointerEvents: "none",
+                    userSelect: "none",
+                  },
+                })}
+              >
+                {(() => {
+                  if (!connected) {
+                    return (
+                      <button
+                        onClick={openConnectModal}
+                        type="button"
+                        className="px-4 py-2 rounded-lg border-2 border-accent text-accent text-sm font-medium hover:bg-accent/10 transition-all duration-200"
+                      >
+                        Connect Wallet
+                      </button>
+                    );
+                  }
+
+                  if (chain.unsupported) {
+                    return (
+                      <button
+                        onClick={openChainModal}
+                        type="button"
+                        className="px-4 py-2 rounded-lg border-2 border-destructive text-destructive text-sm font-medium hover:bg-destructive/10 transition-all duration-200"
+                      >
+                        Wrong network
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={openChainModal}
+                        type="button"
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-secondary/50 text-sm text-foreground hover:bg-secondary transition-all duration-200"
+                      >
+                        {chain.hasIcon && chain.iconUrl && (
+                          // RainbowKit ships chain icons; for Arc testnet
+                          // we won't have one and this conditional just
+                          // skips the <img> cleanly.
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            alt={chain.name ?? "chain icon"}
+                            src={chain.iconUrl}
+                            className="w-4 h-4 rounded-full"
+                          />
+                        )}
+                        <span className="font-mono">{chain.name}</span>
+                      </button>
+                      <button
+                        onClick={openAccountModal}
+                        type="button"
+                        className="px-3 py-2 rounded-lg border-2 border-accent text-accent text-sm font-mono font-medium hover:bg-accent/10 transition-all duration-200"
+                      >
+                        {account.displayName}
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+            );
+          }}
+        </ConnectButton.Custom>
       </div>
     </header>
   );
