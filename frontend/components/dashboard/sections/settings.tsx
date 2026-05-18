@@ -1,540 +1,504 @@
 "use client";
 
-import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
+/**
+ * Settings — read-only network + contract + wallet info.
+ *
+ * Replaces the v0 salesops settings page (API keys, billing, team invites,
+ * notifications) with what's actually useful for a wallet-driven dapp:
+ * the chain we're talking to, the contracts we read/write, and the
+ * connected wallet's state. No persisted preferences — the chain is
+ * pinned to Arc Testnet in `lib/chains.ts`, so there's nothing to
+ * configure here yet.
+ *
+ * Four cards:
+ *   1. Network          — chain status, chain id, RPC URL, explorer link
+ *   2. Contract Addresses — JobEscrow, USDC, ERC-8004 registries
+ *   3. Wallet           — only rendered when connected (address, USDC
+ *                          balance, chain match)
+ *   4. About            — one-liner, version, source link
+ *
+ * Everything technical is mono-font and copy-button-adjacent. Block
+ * explorer links open in a new tab.
+ */
+
+import { useEffect, useState } from "react";
+import { useAccount, useBalance, useChainId, useSwitchChain } from "wagmi";
+import { formatUnits } from "viem";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Wallet,
-  Bell,
-  Shield,
-  Palette,
-  Link2,
-  Globe,
-  Key,
-  RefreshCw,
-  Check,
-  ExternalLink,
-  Zap,
+  Activity,
   Coins,
-  Bot,
-  AlertTriangle,
-  Copy,
+  ExternalLink,
+  FileCode2,
+  Github,
+  Globe,
+  Info,
+  Network,
+  ShieldCheck,
+  Wallet,
 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CopyButton } from "@/components/ui/copy-button";
+import { arcTestnet } from "@/lib/chains";
+import { CHAIN_ID, CONTRACT_ADDRESSES } from "@/lib/contracts";
 
-const integrations = [
-  {
-    id: "arc",
-    name: "Arc Blockchain",
-    description: "Primary network for transactions",
-    connected: true,
-    network: "Testnet",
-  },
-  {
-    id: "usdc",
-    name: "USDC",
-    description: "Stablecoin for payments",
-    connected: true,
-    balance: "1,247",
-  },
-  {
-    id: "openai",
-    name: "OpenAI API",
-    description: "Agent inference provider",
-    connected: true,
-    status: "Active",
-  },
-  {
-    id: "anthropic",
-    name: "Anthropic API",
-    description: "Alternative inference provider",
-    connected: false,
-    status: null,
-  },
-  {
-    id: "github",
-    name: "GitHub",
-    description: "Code repository access for agents",
-    connected: true,
-    status: "Linked",
-  },
-  {
-    id: "ipfs",
-    name: "IPFS",
-    description: "Decentralized file storage",
-    connected: false,
-    status: null,
-  },
-];
+/**
+ * Hardcoded version string. The frontend package.json is still at `0.0.0`
+ * (v0 scaffold default) — bumping it across the codebase is out of scope
+ * for Phase 5a. Update both sides together in a future release commit.
+ */
+const FRONTEND_VERSION = "v0.1.0";
 
-const notificationSettings = [
+const GITHUB_URL = "https://github.com/forgearcdev/forge-arc";
+
+const RPC_URL = arcTestnet.rpcUrls.default.http[0];
+const EXPLORER_URL = arcTestnet.blockExplorers?.default.url ?? "";
+
+/**
+ * Truncate `0x1234567890abcdef…` to `0x123456…cdef` for display in narrow
+ * columns. Keeps enough head/tail bytes for at-a-glance identification.
+ * Falls through unchanged for strings that aren't long enough to truncate.
+ */
+function truncateAddress(addr: string, head = 6, tail = 4): string {
+  if (addr.length <= head + tail + 2) return addr;
+  return `${addr.slice(0, head + 2)}…${addr.slice(-tail)}`;
+}
+
+/** Convenience: build an Arcscan address page URL. */
+function explorerAddressUrl(address: string): string {
+  return `${EXPLORER_URL}/address/${address}`;
+}
+
+/**
+ * Same `formatUsdc` we use in overview.tsx / pipeline-overview.tsx /
+ * recent-deals.tsx. Keeping it inline (rather than extracting a shared
+ * util) until the fourth caller, then we promote.
+ */
+function formatUsdc(microUnits: bigint): string {
+  return Number(formatUnits(microUnits, 6)).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/**
+ * Ordered list driving the Contract Addresses card. Pulled from
+ * `CONTRACT_ADDRESSES` so this stays a single source of truth — the only
+ * thing this file adds is a human-readable label per entry.
+ *
+ * Order matters: JobEscrow first (it's our contract, most relevant),
+ * then USDC (the asset), then the ERC-8004 registries (external standard).
+ */
+const CONTRACT_ROWS: Array<{
+  label: string;
+  description: string;
+  address: `0x${string}`;
+}> = [
   {
-    id: "job_updates",
-    label: "Job Updates",
-    description: "Get notified when jobs change status",
-    onchain: true,
-    push: true,
+    label: "JobEscrow",
+    description: "Forge's escrow + payout contract",
+    address: CONTRACT_ADDRESSES.jobEscrow,
   },
   {
-    id: "payment_alerts",
-    label: "Payment Alerts",
-    description: "Alerts for USDC payments and escrow releases",
-    onchain: true,
-    push: true,
+    label: "USDC",
+    description: "Native gas + bounty asset on Arc",
+    address: CONTRACT_ADDRESSES.usdc,
   },
   {
-    id: "agent_activity",
-    label: "Agent Activity",
-    description: "Updates on agent submissions and completions",
-    onchain: false,
-    push: true,
+    label: "IdentityRegistry",
+    description: "ERC-8004 agent identity NFT",
+    address: CONTRACT_ADDRESSES.identityRegistry,
   },
   {
-    id: "reputation_changes",
-    label: "Reputation Changes",
-    description: "Notifications when reputation scores change",
-    onchain: false,
-    push: false,
+    label: "ReputationRegistry",
+    description: "ERC-8004 client feedback log",
+    address: CONTRACT_ADDRESSES.reputationRegistry,
   },
   {
-    id: "expiry_warnings",
-    label: "Expiry Warnings",
-    description: "Alerts before jobs or escrows expire",
-    onchain: false,
-    push: true,
+    label: "ValidationRegistry",
+    description: "ERC-8004 third-party validation",
+    address: CONTRACT_ADDRESSES.validationRegistry,
   },
 ];
 
 export function SettingsSection() {
-  const [activeTab, setActiveTab] = useState("wallet");
-  const [notifications, setNotifications] = useState(notificationSettings);
-  const [isSaving, setIsSaving] = useState(false);
-
-  const handleSave = () => {
-    setIsSaving(true);
-    setTimeout(() => setIsSaving(false), 1500);
-  };
-
-  const toggleNotification = (id: string, type: "onchain" | "push") => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, [type]: !n[type] } : n))
-    );
-  };
-
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-foreground">Settings</h2>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage your wallet, preferences, and integrations
+          Network info, deployed contracts, and connected-wallet status.
         </p>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="bg-secondary border border-border p-1">
-          <TabsTrigger
-            value="wallet"
-            className="data-[state=active]:bg-card data-[state=active]:text-foreground"
-          >
-            <Wallet className="w-4 h-4 mr-2" />
-            Wallet
-          </TabsTrigger>
-          <TabsTrigger
-            value="notifications"
-            className="data-[state=active]:bg-card data-[state=active]:text-foreground"
-          >
-            <Bell className="w-4 h-4 mr-2" />
-            Notifications
-          </TabsTrigger>
-          <TabsTrigger
-            value="integrations"
-            className="data-[state=active]:bg-card data-[state=active]:text-foreground"
-          >
-            <Link2 className="w-4 h-4 mr-2" />
-            Integrations
-          </TabsTrigger>
-          <TabsTrigger
-            value="security"
-            className="data-[state=active]:bg-card data-[state=active]:text-foreground"
-          >
-            <Shield className="w-4 h-4 mr-2" />
-            Security
-          </TabsTrigger>
-        </TabsList>
-
-        {/* Wallet Tab */}
-        <TabsContent value="wallet" className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Connected Wallet</CardTitle>
-              <CardDescription>Your primary wallet for transactions on forge</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex items-center gap-6 p-4 rounded-lg bg-secondary/50 border border-border">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent/80 to-chart-1 flex items-center justify-center">
-                  <Wallet className="w-6 h-6 text-accent-foreground" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm text-muted-foreground">Connected Address</p>
-                  <div className="flex items-center gap-2">
-                    <p className="text-lg font-mono font-medium text-foreground">0x7a2f...8f41</p>
-                    <button className="p-1 hover:bg-secondary rounded transition-colors">
-                      <Copy className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-                    </button>
-                  </div>
-                </div>
-                <Button variant="outline" size="sm">
-                  Disconnect
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-lg bg-secondary/30 border border-border">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                    <Coins className="w-4 h-4" />
-                    USDC Balance
-                  </div>
-                  <p className="text-2xl font-bold font-mono text-foreground">1,247 <span className="text-sm font-normal text-muted-foreground">USDC</span></p>
-                </div>
-                <div className="p-4 rounded-lg bg-secondary/30 border border-border">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                    <Bot className="w-4 h-4" />
-                    Registered Agents
-                  </div>
-                  <p className="text-2xl font-bold text-foreground">3</p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="network">Network</Label>
-                <Select defaultValue="testnet">
-                  <SelectTrigger className="bg-secondary border-border w-full md:w-[300px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="testnet">Arc Testnet</SelectItem>
-                    <SelectItem value="mainnet" disabled>Arc Mainnet (Coming Soon)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Display Preferences</CardTitle>
-              <CardDescription>Customize how data is displayed</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Palette className="w-5 h-5 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium text-foreground">Dark Mode</p>
-                    <p className="text-sm text-muted-foreground">Use dark theme for the interface</p>
-                  </div>
-                </div>
-                <Switch defaultChecked />
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Globe className="w-5 h-5 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium text-foreground">Amount Display</p>
-                    <p className="text-sm text-muted-foreground">Show amounts in USDC or USD equivalent</p>
-                  </div>
-                </div>
-                <Select defaultValue="usdc">
-                  <SelectTrigger className="w-[120px] bg-secondary border-border">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="usdc">USDC</SelectItem>
-                    <SelectItem value="usd">USD ($)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Key className="w-5 h-5 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium text-foreground">Show Full Addresses</p>
-                    <p className="text-sm text-muted-foreground">Display complete wallet addresses</p>
-                  </div>
-                </div>
-                <Switch />
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="flex justify-end">
-            <Button
-              onClick={handleSave}
-              className="bg-accent hover:bg-accent/90 text-accent-foreground"
-              disabled={isSaving}
-            >
-              {isSaving ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Check className="w-4 h-4 mr-2" />
-                  Save Changes
-                </>
-              )}
-            </Button>
-          </div>
-        </TabsContent>
-
-        {/* Notifications Tab */}
-        <TabsContent value="notifications" className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Notification Preferences</CardTitle>
-              <CardDescription>Choose how and when you want to be notified</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-1">
-                <div className="grid grid-cols-[1fr,80px,80px] gap-4 pb-3 border-b border-border text-sm text-muted-foreground">
-                  <span>Notification Type</span>
-                  <span className="text-center flex items-center justify-center gap-1.5">
-                    <Link2 className="w-4 h-4" />
-                    Onchain
-                  </span>
-                  <span className="text-center flex items-center justify-center gap-1.5">
-                    <Bell className="w-4 h-4" />
-                    Push
-                  </span>
-                </div>
-                {notifications.map((notification, index) => (
-                  <div
-                    key={notification.id}
-                    className="grid grid-cols-[1fr,80px,80px] gap-4 py-4 border-b border-border last:border-0 animate-in fade-in slide-in-from-left-2"
-                    style={{ animationDelay: `${index * 50}ms` }}
-                  >
-                    <div>
-                      <p className="font-medium text-foreground">{notification.label}</p>
-                      <p className="text-sm text-muted-foreground">{notification.description}</p>
-                    </div>
-                    <div className="flex items-center justify-center">
-                      <Switch
-                        checked={notification.onchain}
-                        onCheckedChange={() => toggleNotification(notification.id, "onchain")}
-                      />
-                    </div>
-                    <div className="flex items-center justify-center">
-                      <Switch
-                        checked={notification.push}
-                        onCheckedChange={() => toggleNotification(notification.id, "push")}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Integrations Tab */}
-        <TabsContent value="integrations" className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Connected Services</CardTitle>
-              <CardDescription>Manage your blockchain and API integrations</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {integrations.map((integration, index) => (
-                  <div
-                    key={integration.id}
-                    className={`p-4 rounded-lg border transition-all duration-300 animate-in fade-in slide-in-from-bottom-2 ${
-                      integration.connected
-                        ? "bg-secondary/50 border-border hover:border-accent/50"
-                        : "bg-secondary/20 border-border hover:border-muted-foreground/30"
-                    }`}
-                    style={{ animationDelay: `${index * 75}ms` }}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                            integration.connected ? "bg-accent/20" : "bg-muted"
-                          }`}
-                        >
-                          <Zap
-                            className={`w-5 h-5 ${
-                              integration.connected ? "text-accent" : "text-muted-foreground"
-                            }`}
-                          />
-                        </div>
-                        <div>
-                          <p className="font-medium text-foreground">{integration.name}</p>
-                          <p className="text-sm text-muted-foreground">{integration.description}</p>
-                        </div>
-                      </div>
-                      <Badge
-                        className={
-                          integration.connected
-                            ? "bg-accent/20 text-accent border-accent/30"
-                            : "bg-muted text-muted-foreground border-border"
-                        }
-                      >
-                        {integration.connected ? "Connected" : "Not connected"}
-                      </Badge>
-                    </div>
-                    <div className="mt-4 flex items-center justify-between">
-                      {integration.connected ? (
-                        <>
-                          <span className="text-xs font-mono text-muted-foreground">
-                            {integration.balance ? `${integration.balance} USDC` : integration.network || integration.status}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <Button variant="ghost" size="sm" className="h-8">
-                              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-                              Refresh
-                            </Button>
-                            <Button variant="ghost" size="sm" className="h-8 text-destructive hover:text-destructive">
-                              Disconnect
-                            </Button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-xs text-muted-foreground">Not configured</span>
-                          <Button
-                            size="sm"
-                            className="h-8 bg-accent hover:bg-accent/90 text-accent-foreground"
-                          >
-                            Connect
-                            <ExternalLink className="w-3.5 h-3.5 ml-1.5" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Security Tab */}
-        <TabsContent value="security" className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">API Keys</CardTitle>
-              <CardDescription>Manage API keys for programmatic access</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="p-4 rounded-lg bg-secondary/50 border border-border">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <p className="font-medium text-foreground">Production API Key</p>
-                    <p className="text-sm text-muted-foreground">Use this key for production applications</p>
-                  </div>
-                  <Badge className="bg-success/20 text-success border-success/30">Active</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="password"
-                    value="(your-production-stripe-key)"
-                    readOnly
-                    className="bg-background border-border font-mono text-sm"
-                  />
-                  <Button variant="outline" size="sm">
-                    <Copy className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm">
-                    Regenerate
-                  </Button>
-                </div>
-              </div>
-              <div className="p-4 rounded-lg bg-secondary/50 border border-border">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <p className="font-medium text-foreground">Test API Key</p>
-                    <p className="text-sm text-muted-foreground">Use this key for development and testing</p>
-                  </div>
-                  <Badge className="bg-muted text-muted-foreground border-border">Test Mode</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="password"
-                    value="(your-test-stripe-key)"
-                    readOnly
-                    className="bg-background border-border font-mono text-sm"
-                  />
-                  <Button variant="outline" size="sm">
-                    <Copy className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm">
-                    Regenerate
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base font-medium">Transaction Signing</CardTitle>
-              <CardDescription>Configure how transactions are signed</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between p-4 rounded-lg bg-secondary/50 border border-border">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center">
-                    <Shield className="w-5 h-5 text-accent" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-foreground">Require Confirmation</p>
-                    <p className="text-sm text-muted-foreground">
-                      Confirm all transactions above 100 USDC
-                    </p>
-                  </div>
-                </div>
-                <Switch defaultChecked />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border bg-card border-destructive/30">
-            <CardHeader>
-              <CardTitle className="text-base font-medium text-destructive flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" />
-                Danger Zone
-              </CardTitle>
-              <CardDescription>Irreversible actions</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between p-4 rounded-lg bg-destructive/5 border border-destructive/20">
-                <div>
-                  <p className="font-medium text-foreground">Deactivate Account</p>
-                  <p className="text-sm text-muted-foreground">
-                    This will cancel all active jobs and release escrowed funds
-                  </p>
-                </div>
-                <Button variant="destructive" size="sm">
-                  Deactivate
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      <NetworkCard />
+      <ContractsCard />
+      <WalletCard />
+      <AboutCard />
     </div>
   );
 }
+
+/* ─── Network card ───────────────────────────────────────────────────── */
+
+function NetworkCard() {
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <CardTitle className="text-base font-medium flex items-center gap-2">
+          <Network className="w-4 h-4 text-muted-foreground" />
+          Network
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <NetworkStatusRow />
+
+        <KeyValueRow label="Chain ID" value={CHAIN_ID.toString()} copyable />
+        <KeyValueRow
+          label="RPC URL"
+          value={RPC_URL}
+          copyable
+          // RPC URL is long enough on mobile that we want it to wrap; let
+          // the cell breathe rather than truncating.
+        />
+        <KeyValueRow
+          label="Block Explorer"
+          // Strip protocol for a cleaner display — the link itself still
+          // points at the full URL.
+          value={EXPLORER_URL.replace(/^https?:\/\//, "")}
+          link={EXPLORER_URL}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Three-state pill identical in semantics to the header NetworkIndicator
+ * but laid out as a labelled row inside the Settings card.
+ */
+function NetworkStatusRow() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const { isConnected } = useAccount();
+  const chainId = useChainId();
+  const { switchChain } = useSwitchChain();
+
+  const onArc = chainId === arcTestnet.id;
+
+  let dot: React.ReactNode;
+  let label: string;
+  let labelClass = "text-muted-foreground";
+  let action: React.ReactNode = null;
+
+  if (!mounted || !isConnected) {
+    dot = <span className="w-2 h-2 rounded-full bg-muted-foreground/60" />;
+    label = "Wallet not connected";
+  } else if (onArc) {
+    dot = <span className="w-2 h-2 rounded-full bg-success animate-pulse" />;
+    label = `Connected — ${arcTestnet.name}`;
+    labelClass = "text-success";
+  } else {
+    dot = (
+      <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
+    );
+    label = `Wrong chain (id ${chainId})`;
+    labelClass = "text-destructive";
+    action = (
+      <button
+        type="button"
+        onClick={() => switchChain({ chainId: arcTestnet.id })}
+        className="text-xs font-medium text-destructive underline underline-offset-2 hover:opacity-80 transition-opacity"
+      >
+        switch
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 py-1">
+      <span className="text-sm text-muted-foreground">Status</span>
+      <div className="flex items-center gap-2">
+        {dot}
+        <span className={`text-sm font-medium ${labelClass}`}>{label}</span>
+        {action}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Contracts card ─────────────────────────────────────────────────── */
+
+function ContractsCard() {
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <CardTitle className="text-base font-medium flex items-center gap-2">
+          <FileCode2 className="w-4 h-4 text-muted-foreground" />
+          Contract Addresses
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="divide-y divide-border">
+        {CONTRACT_ROWS.map((row) => (
+          <div
+            key={row.label}
+            className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">{row.label}</p>
+              <p className="text-xs text-muted-foreground">{row.description}</p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <code
+                className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
+                title={row.address}
+              >
+                {truncateAddress(row.address)}
+              </code>
+              <CopyButton value={row.address} label={`Copy ${row.label} address`} />
+              <a
+                href={explorerAddressUrl(row.address)}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`View ${row.label} on Arcscan`}
+                title="View on Arcscan"
+                className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── Wallet card (gated on connection) ──────────────────────────────── */
+
+function WalletCard() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const { address, isConnected } = useAccount();
+  const chainId = useChainId();
+  const onArc = chainId === arcTestnet.id;
+
+  // `useBalance` with no `token` arg reads the native balance — which IS
+  // USDC on Arc (chain.nativeCurrency.decimals = 6). Pinned to CHAIN_ID
+  // so we don't accidentally show a wrong-chain balance.
+  const { data: balance, isLoading: balanceLoading } = useBalance({
+    address,
+    chainId: CHAIN_ID,
+    query: { enabled: !!address && onArc },
+  });
+
+  // Pre-mount or disconnected: render nothing. We intentionally don't show
+  // a placeholder here — the Network card already surfaces "wallet not
+  // connected" status. Avoid double signal.
+  if (!mounted || !isConnected || !address) return null;
+
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <CardTitle className="text-base font-medium flex items-center gap-2">
+          <Wallet className="w-4 h-4 text-muted-foreground" />
+          Wallet
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between gap-3 py-1">
+          <span className="text-sm text-muted-foreground">Address</span>
+          <div className="flex items-center gap-1 min-w-0">
+            <code
+              className="font-mono text-xs text-foreground truncate"
+              title={address}
+            >
+              {truncateAddress(address, 8, 6)}
+            </code>
+            <CopyButton value={address} label="Copy wallet address" />
+            <a
+              href={explorerAddressUrl(address)}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="View wallet on Arcscan"
+              title="View on Arcscan"
+              className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 py-1">
+          <span className="text-sm text-muted-foreground flex items-center gap-2">
+            <Coins className="w-3.5 h-3.5" />
+            USDC Balance
+          </span>
+          {!onArc ? (
+            <span className="text-sm text-muted-foreground/70 italic">
+              switch to Arc to view
+            </span>
+          ) : balanceLoading ? (
+            <span className="text-sm font-mono text-muted-foreground">…</span>
+          ) : balance ? (
+            <span className="text-sm font-mono font-medium text-foreground">
+              {formatUsdc(balance.value)}{" "}
+              <span className="text-xs text-muted-foreground">USDC</span>
+            </span>
+          ) : (
+            <span className="text-sm font-mono text-muted-foreground">—</span>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 py-1">
+          <span className="text-sm text-muted-foreground flex items-center gap-2">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            Chain Match
+          </span>
+          <span
+            className={`text-sm font-medium ${
+              onArc ? "text-success" : "text-destructive"
+            }`}
+          >
+            {onArc ? "On Arc Testnet" : `Wrong chain (id ${chainId})`}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── About card ─────────────────────────────────────────────────────── */
+
+function AboutCard() {
+  return (
+    <Card className="border-border bg-card">
+      <CardHeader>
+        <CardTitle className="text-base font-medium flex items-center gap-2">
+          <Info className="w-4 h-4 text-muted-foreground" />
+          About
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-foreground">
+          Forge — an on-chain marketplace for autonomous agents, built on
+          Arc with USDC-denominated jobs and ERC-8004 reputation.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+          <InfoRow label="Frontend version" value={FRONTEND_VERSION} mono />
+          <InfoRow
+            label="Source"
+            valueNode={
+              <a
+                href={GITHUB_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-sm font-mono text-accent hover:underline"
+              >
+                <Github className="w-3.5 h-3.5" />
+                {GITHUB_URL.replace(/^https?:\/\//, "")}
+              </a>
+            }
+          />
+          <InfoRow
+            label="Docs"
+            valueNode={
+              <span
+                className="inline-flex items-center gap-1 text-sm font-mono text-muted-foreground/70 cursor-not-allowed"
+                title="Coming soon"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                coming soon
+              </span>
+            }
+          />
+          <InfoRow
+            label="Status"
+            valueNode={
+              <span className="inline-flex items-center gap-1 text-sm font-medium text-success">
+                <Activity className="w-3.5 h-3.5" />
+                Testnet live
+              </span>
+            }
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── Shared layout primitives ───────────────────────────────────────── */
+
+interface KeyValueRowProps {
+  label: string;
+  value: string;
+  copyable?: boolean;
+  /** When set, `value` is rendered as a link to this URL. */
+  link?: string;
+}
+
+function KeyValueRow({ label, value, copyable, link }: KeyValueRowProps) {
+  // Right-side value: link if `link`, plain code otherwise.
+  const valueNode = link ? (
+    <a
+      href={link}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-mono text-xs text-accent hover:underline truncate"
+    >
+      {value}
+    </a>
+  ) : (
+    <code className="font-mono text-xs text-foreground break-all">
+      {value}
+    </code>
+  );
+
+  return (
+    <div className="flex items-center justify-between gap-3 py-1">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1 min-w-0 max-w-[60%] justify-end">
+        {valueNode}
+        {copyable && <CopyButton value={value} label={`Copy ${label}`} />}
+        {link && (
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${label}`}
+            title={`Open ${label}`}
+            className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface InfoRowProps {
+  label: string;
+  value?: string;
+  valueNode?: React.ReactNode;
+  mono?: boolean;
+}
+
+function InfoRow({ label, value, valueNode, mono }: InfoRowProps) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-xs text-muted-foreground uppercase tracking-wide">
+        {label}
+      </span>
+      {valueNode ?? (
+        <span
+          className={`text-sm text-foreground ${mono ? "font-mono" : ""}`}
+        >
+          {value}
+        </span>
+      )}
+    </div>
+  );
+}
+

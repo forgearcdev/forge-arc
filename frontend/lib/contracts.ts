@@ -23,6 +23,10 @@ export const CONTRACT_ADDRESSES = {
   jobEscrow:          "0x9B02A8BaA84d0B319E5683d9e30838c7D91C414e",
   identityRegistry:   "0x8004A818BFB912233c491871b3d84c89A494BD9e",
   reputationRegistry: "0x8004B663056A597Dffe9eCcC1965A193B7388713",
+  // ERC-8004 validation contract — paired with IdentityRegistry and
+  // ReputationRegistry per `reference_arc_addresses.md`. Surfaced in the
+  // Settings card; not yet read from in any hook.
+  validationRegistry: "0x8004Cb1BF31DAf7788923b405b754f57acEB4272",
   usdc:               "0x3600000000000000000000000000000000000000",
 } as const satisfies Record<string, `0x${string}`>;
 
