@@ -1,348 +1,560 @@
 "use client";
 
+/**
+ * Agents section — registered ERC-8004 agent NFTs with their on-chain
+ * activity aggregated from JobEscrow + ReputationRegistry.
+ *
+ * Read-only in this phase. Phase 5e will wire "Register Agent" to a real
+ * mint flow against the IdentityRegistry; the button currently just logs
+ * a placeholder and is gated behind RequiresWallet.
+ *
+ * Data: `useAgents()` derives one row per unique agentId observed in
+ * JobEscrow. Owner addresses are pulled via batched ownerOf reads against
+ * the IdentityRegistry; reputation counts come from batched getLastIndex
+ * reads against the ReputationRegistry. Net new RPC trips per page load:
+ * one batched ownerOf + one batched getLastIndex. Everything else
+ * piggybacks on the same reads the Overview already triggers.
+ *
+ * Render branches:
+ *   - loading: 5 skeleton rows
+ *   - error: friendly summary + Retry
+ *   - empty (totalAgents === 0): "No agents yet — be the first to register"
+ *   - normal: live table
+ *
+ * Sort: USDC earned DESC (top earners first). No status filter — we'll
+ * add one when the agent count grows past ~20 (current count: 2).
+ */
+
 import { useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { RequiresWallet } from "@/components/requires-wallet";
+import { formatUnits } from "viem";
+import { formatDistanceToNow } from "date-fns";
 import {
   Bot,
-  Search,
-  Plus,
   Briefcase,
+  ChevronDown,
   Coins,
   ExternalLink,
+  MoreVertical,
+  Plus,
   Star,
-  TrendingUp,
-  TrendingDown,
-  Filter,
-  Clock,
-  CheckCircle2,
+  User,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import { CopyButton } from "@/components/ui/copy-button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { RequiresWallet } from "@/components/requires-wallet";
+import { useAgents, type Agent } from "@/hooks/use-agents";
+import { CONTRACT_ADDRESSES } from "@/lib/contracts";
+import { arcTestnet } from "@/lib/chains";
 
-const agents = [
-  {
-    id: 1,
-    name: "summarizer-v2",
-    address: "0x7a2f...8f41",
-    fullAddress: "0x7a2f...8f41",
-    category: "Analysis",
-    tier: "Verified",
-    completedJobs: 142,
-    totalEarned: 3420,
-    successRate: 98,
-    avgResponseTime: "2.4h",
-    trend: "up",
-    lastActive: "2 min ago",
-    reputation: 847,
-  },
-  {
-    id: 2,
-    name: "copywriter-gpt",
-    address: "0x8b3e...e52c",
-    fullAddress: "0x8b3e...e52c",
-    category: "Content",
-    tier: "Verified",
-    completedJobs: 98,
-    totalEarned: 2156,
-    successRate: 94,
-    avgResponseTime: "1.8h",
-    trend: "up",
-    lastActive: "15 min ago",
-    reputation: 723,
-  },
-  {
-    id: 3,
-    name: "translator-ml",
-    address: "0x4c1d...d23a",
-    fullAddress: "0x4c1d...d23a",
-    category: "Translation",
-    tier: "Rising",
-    completedJobs: 76,
-    totalEarned: 1812,
-    successRate: 96,
-    avgResponseTime: "3.1h",
-    trend: "stable",
-    lastActive: "1 hour ago",
-    reputation: 612,
-  },
-  {
-    id: 4,
-    name: "auditor-sec",
-    address: "0x9d4a...a94b",
-    fullAddress: "0x9d4a...a94b",
-    category: "Security",
-    tier: "Verified",
-    completedJobs: 54,
-    totalEarned: 4890,
-    successRate: 100,
-    avgResponseTime: "8.2h",
-    trend: "up",
-    lastActive: "3 hours ago",
-    reputation: 892,
-  },
-  {
-    id: 5,
-    name: "data-analyst",
-    address: "0x2e5b...b65f",
-    fullAddress: "0x2e5b...b65f",
-    category: "Analysis",
-    tier: "Rising",
-    completedJobs: 41,
-    totalEarned: 1267,
-    successRate: 92,
-    avgResponseTime: "4.5h",
-    trend: "down",
-    lastActive: "2 days ago",
-    reputation: 445,
-  },
-  {
-    id: 6,
-    name: "designer-ml",
-    address: "0x6f8c...c78d",
-    fullAddress: "0x6f8c...c78d",
-    category: "Design",
-    tier: "New",
-    completedJobs: 12,
-    totalEarned: 456,
-    successRate: 100,
-    avgResponseTime: "5.2h",
-    trend: "up",
-    lastActive: "30 min ago",
-    reputation: 234,
-  },
-];
+const EXPLORER_URL = arcTestnet.blockExplorers?.default.url ?? "";
 
-const tierColors: Record<string, string> = {
-  Verified: "bg-accent/20 text-accent border-accent/30",
-  Rising: "bg-success/20 text-success border-success/30",
-  New: "bg-muted text-muted-foreground border-border",
-};
+/* ─── Shared helpers (mirror pipeline.tsx until extracted) ───────────── */
+
+function formatUsdc(microUnits: bigint): string {
+  return Number(formatUnits(microUnits, 6)).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function relativeTime(seconds: number | null): string {
+  if (seconds == null) return "—";
+  return formatDistanceToNow(new Date(seconds * 1000), { addSuffix: true });
+}
+
+function absoluteTime(seconds: number | null): string {
+  if (seconds == null) return "—";
+  return (
+    new Date(seconds * 1000).toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "UTC",
+    }) + " UTC"
+  );
+}
+
+function truncateAddress(addr: string, head = 6, tail = 4): string {
+  if (addr.length <= head + tail + 2) return addr;
+  return `${addr.slice(0, head + 2)}…${addr.slice(-tail)}`;
+}
+
+/* ─── Section root ───────────────────────────────────────────────────── */
 
 export function CustomersSection() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedTier, setSelectedTier] = useState<string | null>(null);
-
-  const filteredAgents = agents.filter((agent) => {
-    const matchesSearch =
-      agent.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      agent.address.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesTier = !selectedTier || agent.tier === selectedTier;
-    return matchesSearch && matchesTier;
-  });
-
-  const totalEarned = agents.reduce((acc, a) => acc + a.totalEarned, 0);
-  const avgSuccessRate = Math.round(
-    agents.reduce((acc, a) => acc + a.successRate, 0) / agents.length
-  );
+  const { agents, isLoading, isError, refetch } = useAgents();
+  const count = agents?.length ?? null;
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {[
-          {
-            label: "Total Agents",
-            value: agents.length.toString(),
-            icon: Bot,
-            color: "text-foreground",
-          },
-          {
-            label: "Total USDC Earned",
-            value: totalEarned.toLocaleString(),
-            icon: Coins,
-            color: "text-accent",
-            mono: true,
-          },
-          {
-            label: "Avg Success Rate",
-            value: `${avgSuccessRate}%`,
-            icon: CheckCircle2,
-            color: "text-success",
-          },
-          {
-            label: "Total Jobs Completed",
-            value: agents.reduce((acc, a) => acc + a.completedJobs, 0).toString(),
-            icon: Briefcase,
-            color: "text-chart-1",
-          },
-        ].map((stat, index) => (
-          <Card
-            key={stat.label}
-            className="border-border bg-card hover:border-muted-foreground/30 transition-all duration-300"
-            style={{ animationDelay: `${index * 50}ms` }}
-          >
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">{stat.label}</p>
-                  <p className={`text-2xl font-semibold mt-1 ${stat.color} ${stat.mono ? "font-mono" : ""}`}>
-                    {stat.value}
-                  </p>
-                </div>
-                <stat.icon className={`w-8 h-8 ${stat.color} opacity-50`} />
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Filters and Search */}
-      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Search agents..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 w-[280px] bg-secondary border-border focus:border-accent font-mono"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-muted-foreground" />
-            {["Verified", "Rising", "New"].map((tier) => (
-              <Button
-                key={tier}
-                variant={selectedTier === tier ? "default" : "outline"}
-                size="sm"
-                onClick={() => setSelectedTier(selectedTier === tier ? null : tier)}
-                className={selectedTier === tier ? "bg-accent text-accent-foreground" : ""}
-              >
-                {tier}
-              </Button>
-            ))}
-          </div>
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-foreground">Agents</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Registered agents on Arc testnet, sorted by earnings.
+          </p>
         </div>
+
         <RequiresWallet message="Connect wallet to register an agent">
-          <Button className="bg-accent hover:bg-accent/90 text-accent-foreground">
-            <Plus className="w-4 h-4 mr-2" />
+          <button
+            type="button"
+            onClick={() => {
+              // Phase 5e will swap this for a real IdentityRegistry mint
+              // flow. Keep this discoverable in console so it's obvious
+              // the wiring is pending.
+              // eslint-disable-next-line no-console
+              console.log("Phase 5e placeholder — Register Agent clicked");
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-accent-foreground hover:bg-accent/90 transition-colors text-sm font-medium"
+          >
+            <Plus className="w-4 h-4" />
             Register Agent
-          </Button>
+          </button>
         </RequiresWallet>
       </div>
 
-      {/* Agent Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {filteredAgents.map((agent, index) => (
-          <Card
-            key={agent.id}
-            className="border-border bg-card hover:border-accent/50 transition-all duration-300 group animate-in fade-in slide-in-from-bottom-2"
-            style={{ animationDelay: `${index * 75}ms` }}
-          >
-            <CardContent className="p-5">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <Avatar className="w-12 h-12 bg-gradient-to-br from-accent/80 to-chart-1">
-                    <AvatarFallback className="bg-transparent text-accent-foreground font-semibold font-mono">
-                      {agent.name.slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <h3 className="font-semibold text-foreground font-mono group-hover:text-accent transition-colors">
-                      {agent.name}
-                    </h3>
-                    <p className="text-sm text-muted-foreground font-mono">{agent.address}</p>
-                  </div>
-                </div>
-                <Badge className={`${tierColors[agent.tier]} border`}>
-                  {agent.tier}
-                </Badge>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Briefcase className="w-3.5 h-3.5" />
-                    {agent.category}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Clock className="w-3.5 h-3.5" />
-                    Avg: {agent.avgResponseTime}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Star className="w-3.5 h-3.5" />
-                    <span className="font-mono">{agent.reputation} rep</span>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Earned</span>
-                    <span className="font-medium font-mono text-foreground">
-                      {agent.totalEarned.toLocaleString()} USDC
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Jobs</span>
-                    <span className="font-medium text-foreground">{agent.completedJobs}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Last Active</span>
-                    <span className="font-medium text-foreground">{agent.lastActive}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Success Rate */}
-              <div className="flex items-center justify-between pt-4 border-t border-border">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">Success Rate</span>
-                  {agent.trend === "up" && (
-                    <TrendingUp className="w-3.5 h-3.5 text-success" />
-                  )}
-                  {agent.trend === "down" && (
-                    <TrendingDown className="w-3.5 h-3.5 text-destructive" />
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="w-24 h-2 bg-secondary rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-1000 ease-out"
-                      style={{
-                        width: `${agent.successRate}%`,
-                        backgroundColor:
-                          agent.successRate >= 95
-                            ? "oklch(0.65 0.18 145)"
-                            : agent.successRate >= 85
-                            ? "#5b9dff"
-                            : "oklch(0.60 0.22 25)",
-                      }}
-                    />
-                  </div>
-                  <span
-                    className={`text-sm font-semibold ${
-                      agent.successRate >= 95
-                        ? "text-success"
-                        : agent.successRate >= 85
-                        ? "text-accent"
-                        : "text-destructive"
-                    }`}
-                  >
-                    {agent.successRate}%
-                  </span>
-                </div>
-              </div>
-
-              {/* Quick Actions */}
-              <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
-                <Button variant="outline" size="sm" className="flex-1 bg-transparent">
-                  <Briefcase className="w-3.5 h-3.5 mr-1.5" />
-                  Hire Agent
-                </Button>
-                <Button variant="outline" size="sm" className="flex-1 bg-transparent font-mono">
-                  <Coins className="w-3.5 h-3.5 mr-1.5" />
-                  View Txns
-                </Button>
-                <Button variant="ghost" size="sm">
-                  <ExternalLink className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+      {/* Count badge */}
+      {/* Filter to be added when agent count grows (e.g. by "Has earnings"
+       *  vs "No completions yet"). Skipped now — with 2 agents a filter
+       *  would be noise. */}
+      <div className="flex items-center gap-2">
+        <span className="flex-1" />
+        <span className="text-xs font-mono text-muted-foreground">
+          {count == null
+            ? "…"
+            : `${count} ${count === 1 ? "agent" : "agents"}`}
+        </span>
       </div>
+
+      {/* Table card */}
+      <AgentsTable
+        agents={agents}
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+      />
+    </div>
+  );
+}
+
+/* ─── Table body branches ────────────────────────────────────────────── */
+
+interface AgentsTableProps {
+  agents: Agent[] | null;
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+}
+
+function AgentsTable({
+  agents,
+  isLoading,
+  isError,
+  onRetry,
+}: AgentsTableProps) {
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <HeaderRow />
+
+      {isLoading ? (
+        <div>
+          {Array.from({ length: 5 }, (_, i) => (
+            <SkeletonRow key={i} />
+          ))}
+        </div>
+      ) : isError ? (
+        <ErrorState onRetry={onRetry} />
+      ) : !agents || agents.length === 0 ? (
+        <EmptyState />
+      ) : (
+        <div>
+          {agents.map((a) => (
+            <AgentRow key={a.agentId.toString()} agent={a} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const GRID_CLASS =
+  "grid grid-cols-[110px,150px,110px,130px,110px,1fr,60px] gap-4 items-center";
+
+function HeaderRow() {
+  return (
+    <div
+      className={cn(
+        GRID_CLASS,
+        "px-4 py-3 border-b border-border bg-secondary/30 text-xs uppercase tracking-wide text-muted-foreground",
+      )}
+    >
+      <span>Agent ID</span>
+      <span>Owner</span>
+      <span className="text-right">Jobs Done</span>
+      <span className="text-right">USDC Earned</span>
+      <span className="text-right">Reputation</span>
+      <span>Last Active</span>
+      <span className="sr-only">Actions</span>
+    </div>
+  );
+}
+
+function SkeletonRow() {
+  return (
+    <div className={cn(GRID_CLASS, "px-4 py-3 border-b border-border")}>
+      <Skeleton className="h-4 w-20 bg-secondary" />
+      <Skeleton className="h-4 w-28 bg-secondary" />
+      <Skeleton className="h-4 w-8 bg-secondary ml-auto" />
+      <Skeleton className="h-4 w-20 bg-secondary ml-auto" />
+      <Skeleton className="h-4 w-8 bg-secondary ml-auto" />
+      <Skeleton className="h-4 w-32 bg-secondary" />
+      <Skeleton className="h-6 w-6 rounded bg-secondary" />
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="py-16 flex flex-col items-center justify-center text-center px-6">
+      <p className="text-sm text-muted-foreground">
+        No agents yet — be the first to register.
+      </p>
+      <p className="text-xs text-muted-foreground/70 mt-2 max-w-xs">
+        Agents are ERC-8004 NFTs minted via the IdentityRegistry. Once
+        registered, they show up here with on-chain activity stats.
+      </p>
+    </div>
+  );
+}
+
+function ErrorState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="py-16 flex flex-col items-center justify-center text-center px-6">
+      <p className="text-sm text-muted-foreground">
+        Couldn&apos;t load agents.
+      </p>
+      <p className="text-xs text-muted-foreground/70 mt-2 max-w-xs">
+        The RPC node may be busy or temporarily unreachable.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 text-xs text-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
+/* ─── Individual row + expanded detail ───────────────────────────────── */
+
+function AgentRow({ agent }: { agent: Agent }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Mirror the keyboard a11y pattern from pipeline.tsx — using
+  // `<div role="button">` (not a `<button>` with display:contents) because
+  // that caused click-routing flakiness in Chromium during 5b. See
+  // pipeline.tsx commit history for the gotcha.
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setExpanded((prev) => !prev);
+    }
+  };
+
+  // Arcscan deep-link for the NFT token page. IdentityRegistry is an
+  // ERC-721, so Arcscan exposes tokens via /token/<address>?a=<id>.
+  const tokenExplorerUrl = `${EXPLORER_URL}/token/${CONTRACT_ADDRESSES.identityRegistry}?a=${agent.agentId.toString()}`;
+  const ownerExplorerUrl =
+    agent.owner != null ? `${EXPLORER_URL}/address/${agent.owner}` : null;
+
+  return (
+    <div className="border-b border-border last:border-b-0">
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={`Toggle details for Agent #${agent.agentId.toString()}`}
+        onClick={() => setExpanded((e) => !e)}
+        onKeyDown={handleKey}
+        className={cn(
+          GRID_CLASS,
+          "px-4 py-3 hover:bg-secondary/30 transition-colors cursor-pointer text-left focus:outline-none focus-visible:bg-secondary/50",
+        )}
+      >
+        <span className="font-mono text-sm text-foreground flex items-center gap-1.5">
+          <ChevronDown
+            className={cn(
+              "w-3.5 h-3.5 text-muted-foreground transition-transform",
+              expanded && "rotate-180",
+            )}
+          />
+          #{agent.agentId.toString()}
+        </span>
+        <span className="font-mono text-xs text-muted-foreground">
+          {agent.owner != null ? truncateAddress(agent.owner) : "—"}
+        </span>
+        <span className="font-mono text-sm text-foreground text-right">
+          {agent.jobsCompleted}
+          {agent.totalJobs > agent.jobsCompleted && (
+            <span className="text-xs text-muted-foreground">
+              /{agent.totalJobs}
+            </span>
+          )}
+        </span>
+        <span className="font-mono text-sm text-foreground text-right">
+          {formatUsdc(agent.usdcEarnedMicro)}{" "}
+          <span className="text-xs text-muted-foreground">USDC</span>
+        </span>
+        <span className="font-mono text-sm text-foreground text-right flex items-center justify-end gap-1">
+          <Star
+            className={cn(
+              "w-3.5 h-3.5",
+              agent.reputationCount > 0
+                ? "text-accent fill-accent"
+                : "text-muted-foreground",
+            )}
+          />
+          {agent.reputationCount}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {relativeTime(agent.lastJobAt)}
+        </span>
+
+        {/* Actions cell — sibling grid cell so dropdown clicks don't bubble. */}
+        <div
+          className="flex items-center justify-end"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Actions for Agent #${agent.agentId.toString()}`}
+                className="inline-flex items-center justify-center w-7 h-7 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem
+                onSelect={() => {
+                  window.open(tokenExplorerUrl, "_blank");
+                }}
+              >
+                <ExternalLink className="w-3.5 h-3.5 mr-2" />
+                View on Arcscan
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  if (typeof navigator !== "undefined" && navigator.clipboard) {
+                    void navigator.clipboard.writeText(agent.agentId.toString());
+                  }
+                }}
+              >
+                <Bot className="w-3.5 h-3.5 mr-2" />
+                Copy Agent ID
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={agent.owner == null}
+                onSelect={() => {
+                  if (
+                    agent.owner != null &&
+                    typeof navigator !== "undefined" &&
+                    navigator.clipboard
+                  ) {
+                    void navigator.clipboard.writeText(agent.owner);
+                  }
+                }}
+              >
+                <User className="w-3.5 h-3.5 mr-2" />
+                Copy Owner Address
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      {expanded && (
+        <AgentDetail
+          agent={agent}
+          tokenExplorerUrl={tokenExplorerUrl}
+          ownerExplorerUrl={ownerExplorerUrl}
+        />
+      )}
+    </div>
+  );
+}
+
+function AgentDetail({
+  agent,
+  tokenExplorerUrl,
+  ownerExplorerUrl,
+}: {
+  agent: Agent;
+  tokenExplorerUrl: string;
+  ownerExplorerUrl: string | null;
+}) {
+  return (
+    <div className="bg-secondary/30 border-t border-border px-4 py-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+        <DetailRow
+          label="Owner Address"
+          value={
+            agent.owner != null ? (
+              <span className="inline-flex items-center gap-1">
+                <code
+                  className="font-mono text-xs text-foreground"
+                  title={agent.owner}
+                >
+                  {truncateAddress(agent.owner, 8, 6)}
+                </code>
+                <CopyButton value={agent.owner} label="Copy owner address" />
+                {ownerExplorerUrl && (
+                  <a
+                    href={ownerExplorerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="View owner on Arcscan"
+                    className="inline-flex items-center justify-center rounded p-1 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">—</span>
+            )
+          }
+        />
+        <DetailRow
+          label="NFT Token Page"
+          value={
+            <a
+              href={tokenExplorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              View on Arcscan
+            </a>
+          }
+        />
+        <DetailRow
+          label="Earnings"
+          value={
+            <span className="text-xs text-foreground inline-flex items-center gap-2">
+              <Coins className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="font-mono">
+                {formatUsdc(agent.usdcEarnedMicro)} USDC
+              </span>
+              <span className="text-muted-foreground">
+                from {agent.jobsCompleted}{" "}
+                {agent.jobsCompleted === 1 ? "completed job" : "completed jobs"}
+                {agent.totalJobs > agent.jobsCompleted &&
+                  ` (${agent.totalJobs} total assigned)`}
+              </span>
+            </span>
+          }
+        />
+        <DetailRow
+          label="Reputation"
+          value={
+            <span className="text-xs text-foreground inline-flex items-center gap-2">
+              <Star
+                className={cn(
+                  "w-3.5 h-3.5",
+                  agent.reputationCount > 0
+                    ? "text-accent fill-accent"
+                    : "text-muted-foreground",
+                )}
+              />
+              {agent.reputationCount === 0 ? (
+                <span className="text-muted-foreground">
+                  No feedback yet
+                </span>
+              ) : (
+                <span>
+                  {agent.reputationCount}{" "}
+                  {agent.reputationCount === 1 ? "entry" : "entries"} from
+                  client feedback
+                </span>
+              )}
+            </span>
+          }
+        />
+        <DetailRow
+          label="Last Active"
+          value={
+            <span className="text-xs text-foreground">
+              {absoluteTime(agent.lastJobAt)}
+              <span className="text-muted-foreground ml-2">
+                ({relativeTime(agent.lastJobAt)})
+              </span>
+            </span>
+          }
+          fullWidth
+        />
+        <DetailRow
+          label="Jobs"
+          value={
+            agent.jobIds.length > 0 ? (
+              <span className="text-xs text-foreground inline-flex items-center gap-2 flex-wrap">
+                <Briefcase className="w-3.5 h-3.5 text-muted-foreground" />
+                {agent.jobIds.map((jobId, i) => (
+                  <span
+                    key={jobId.toString()}
+                    className="font-mono text-foreground"
+                  >
+                    {/*
+                     * No deep-link to a filtered Jobs page yet — the Jobs
+                     * section doesn't take a URL param. When it does, this
+                     * becomes an anchor to /?section=jobs&agentId=N.
+                     */}
+                    Job #{jobId.toString()}
+                    {i < agent.jobIds.length - 1 && (
+                      <span className="text-muted-foreground">,</span>
+                    )}
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">—</span>
+            )
+          }
+          fullWidth
+        />
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  fullWidth,
+}: {
+  label: string;
+  value: React.ReactNode;
+  fullWidth?: boolean;
+}) {
+  return (
+    <div className={cn("flex flex-col gap-1", fullWidth && "md:col-span-2")}>
+      <span className="text-xs text-muted-foreground uppercase tracking-wide">
+        {label}
+      </span>
+      {value}
     </div>
   );
 }
