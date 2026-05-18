@@ -22,8 +22,14 @@
  */
 
 import { useEffect, useState } from "react";
-import { useAccount, useBalance, useChainId, useSwitchChain } from "wagmi";
+import {
+  useAccount,
+  useChainId,
+  useReadContract,
+  useSwitchChain,
+} from "wagmi";
 import { formatUnits } from "viem";
+import { USDC_ABI } from "@/lib/abi/usdc";
 import {
   Activity,
   Coins,
@@ -284,11 +290,25 @@ function WalletCard() {
   const chainId = useChainId();
   const onArc = chainId === arcTestnet.id;
 
-  // `useBalance` with no `token` arg reads the native balance — which IS
-  // USDC on Arc (chain.nativeCurrency.decimals = 6). Pinned to CHAIN_ID
-  // so we don't accidentally show a wrong-chain balance.
-  const { data: balance, isLoading: balanceLoading } = useBalance({
-    address,
+  // Read `balanceOf` directly from the USDC contract — NOT `useBalance`.
+  //
+  // Arc's USDC is a hybrid native+ERC-20 token: native balance is stored
+  // in 18 decimals; the ERC-20 view divides by 1e12 to surface a standard
+  // 6-decimal USDC value. `useBalance` reads the native side, so a real
+  // 20 USDC balance shows up as 20 * 1e18 / 1e6 = 20,000,000,000,000.
+  //
+  // `balanceOf` returns the already-scaled microUSDC value (1 USDC =
+  // 1_000_000n), which `formatUsdc` below renders correctly. This is the
+  // same value every other USDC-aware contract on Arc sees — single
+  // source of truth, no magic 1e12 divisor in our code.
+  //
+  // See memory/reference_arc_addresses.md → "Frontend pitfall: useBalance
+  // vs USDC.balanceOf" for the long-form lesson.
+  const { data: balanceMicro, isLoading: balanceLoading } = useReadContract({
+    address: CONTRACT_ADDRESSES.usdc,
+    abi: USDC_ABI,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
     chainId: CHAIN_ID,
     query: { enabled: !!address && onArc },
   });
@@ -341,9 +361,9 @@ function WalletCard() {
             </span>
           ) : balanceLoading ? (
             <span className="text-sm font-mono text-muted-foreground">…</span>
-          ) : balance ? (
+          ) : balanceMicro != null ? (
             <span className="text-sm font-mono font-medium text-foreground">
-              {formatUsdc(balance.value)}{" "}
+              {formatUsdc(balanceMicro)}{" "}
               <span className="text-xs text-muted-foreground">USDC</span>
             </span>
           ) : (
