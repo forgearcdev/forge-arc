@@ -1,50 +1,80 @@
 "use client";
 
+import { formatUnits } from "viem";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { RevenueChart } from "@/components/dashboard/charts/revenue-chart";
 import { PipelineOverview } from "@/components/dashboard/charts/pipeline-overview";
 import { RecentDeals } from "@/components/dashboard/recent-deals";
 import { TopPerformers } from "@/components/dashboard/top-performers";
 import { Coins, TrendingUp, Briefcase, Bot } from "lucide-react";
+import { useJobStats } from "@/hooks/use-job-stats";
+
+/**
+ * Format USDC microunits (6 decimals) as a human-readable string with
+ * 2 decimal places: 1_000_000n → "1.00", 1_234_567_890n → "1,234.57".
+ *
+ * Avoids `formatUnits` returning naked "1" for round amounts (it strips
+ * trailing zeros) — we always show at least cents.
+ */
+function formatUsdc(microUnits: bigint): string {
+  return Number(formatUnits(microUnits, 6)).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
 export function OverviewSection() {
+  const { stats, isLoading, isError } = useJobStats();
+
+  // On error we still render the cards (with em-dashes) rather than vanishing
+  // — the rest of the dashboard should keep working even if a single RPC
+  // hiccup nukes our reads.
+  const totalPaid = stats ? formatUsdc(stats.totalPaidMicro) : "—";
+  const successRate =
+    stats?.successRatePercent == null
+      ? "—"
+      : `${stats.successRatePercent}%`;
+  const activeJobs = stats ? stats.activeJobs.toString() : "—";
+  const uniqueAgents = stats ? stats.uniqueAgents.toString() : "—";
+
+  // No fake trend indicators (no historical comparison data yet). We removed
+  // the +12.5% / +3.2% / -2 / +47 chips from v0's design. Trends will come
+  // back once we have an indexer with day-over-day snapshots — see
+  // frontend_contract_integration_plan.md.
+
   return (
     <div className="space-y-6">
       {/* Metric cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           title="Total USDC Paid"
-          value="24,300"
+          value={totalPaid}
           valueSuffix="USDC"
-          change="+12.5%"
-          changeType="positive"
           icon={Coins}
           delay={0}
           useMono
+          loading={isLoading || isError}
         />
         <MetricCard
           title="Job Success Rate"
-          value="94.2%"
-          change="+3.2%"
-          changeType="positive"
+          value={successRate}
           icon={TrendingUp}
           delay={1}
+          loading={isLoading || isError}
         />
         <MetricCard
           title="Active Jobs"
-          value="12"
-          change="-2"
-          changeType="negative"
+          value={activeJobs}
           icon={Briefcase}
           delay={2}
+          loading={isLoading || isError}
         />
         <MetricCard
           title="Registered Agents"
-          value="342"
-          change="+47"
-          changeType="positive"
+          value={uniqueAgents}
           icon={Bot}
           delay={3}
+          loading={isLoading || isError}
         />
       </div>
 
