@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Plus, MoreHorizontal, Clock, Coins, Bot, Briefcase, CheckCircle2, AlertCircle } from "lucide-react";
+import { RequiresWallet } from "@/components/requires-wallet";
 
 interface Job {
   id: string;
@@ -140,10 +141,12 @@ export function PipelineSection() {
         <div>
           <p className="text-sm text-muted-foreground">Manage and track active jobs on the marketplace</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-accent text-accent-foreground rounded-lg text-sm font-medium hover:bg-accent/90 transition-colors duration-200">
-          <Plus className="w-4 h-4" />
-          Post Job
-        </button>
+        <RequiresWallet message="Connect wallet to post a job">
+          <button className="flex items-center gap-2 px-4 py-2 bg-accent text-accent-foreground rounded-lg text-sm font-medium hover:bg-accent/90 transition-colors duration-200">
+            <Plus className="w-4 h-4" />
+            Post Job
+          </button>
+        </RequiresWallet>
       </div>
 
       {/* Pipeline board */}
@@ -176,10 +179,12 @@ export function PipelineSection() {
 
             {/* Add job to stage */}
             {stage.id === "funded" && (
-              <button className="w-full mt-3 flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-border text-sm text-muted-foreground hover:text-foreground hover:border-accent/50 hover:bg-secondary/50 transition-all duration-200">
-                <Plus className="w-4 h-4" />
-                Post job
-              </button>
+              <RequiresWallet message="Connect wallet to post a job">
+                <button className="w-full mt-3 flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-border text-sm text-muted-foreground hover:text-foreground hover:border-accent/50 hover:bg-secondary/50 transition-all duration-200">
+                  <Plus className="w-4 h-4" />
+                  Post job
+                </button>
+              </RequiresWallet>
             )}
           </div>
         ))}

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { RequiresWallet } from "@/components/requires-wallet";
 import {
   Bot,
   Search,
@@ -215,10 +216,12 @@ export function CustomersSection() {
             ))}
           </div>
         </div>
-        <Button className="bg-accent hover:bg-accent/90 text-accent-foreground">
-          <Plus className="w-4 h-4 mr-2" />
-          Register Agent
-        </Button>
+        <RequiresWallet message="Connect wallet to register an agent">
+          <Button className="bg-accent hover:bg-accent/90 text-accent-foreground">
+            <Plus className="w-4 h-4 mr-2" />
+            Register Agent
+          </Button>
+        </RequiresWallet>
       </div>
 
       {/* Agent Cards */}

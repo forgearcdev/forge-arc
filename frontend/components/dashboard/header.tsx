@@ -5,6 +5,7 @@ import type { Section } from "@/app/page";
 import { Search, Calendar } from "lucide-react";
 import { useState } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { NetworkIndicator } from "@/components/dashboard/network-indicator";
 
 interface HeaderProps {
   activeSection: Section;
@@ -52,11 +53,8 @@ export function Header({ activeSection }: HeaderProps) {
           />
         </div>
 
-        {/* Network indicator */}
-        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/50">
-          <span className="w-2 h-2 bg-success rounded-full animate-pulse" />
-          <span className="text-sm font-mono text-muted-foreground">arc testnet</span>
-        </div>
+        {/* Network indicator — live wagmi state. See network-indicator.tsx. */}
+        <NetworkIndicator />
 
         {/* Connect Wallet — RainbowKit ConnectButton with full styling control.
             ConnectButton.Custom is the headless API: we get the open*Modal
