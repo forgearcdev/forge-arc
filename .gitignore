@@ -11,10 +11,11 @@ dist/
 build/
 *.tsbuildinfo
 
-# --- Next.js (when /frontend gets scaffolded) ---
+# --- Next.js (frontend/) ---
 .next/
 out/
 .vercel/
+next-env.d.ts
 
 # --- Foundry ---
 contracts/cache/

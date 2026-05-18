@@ -2,3 +2,9 @@ packages:
   - 'backend'
   - 'frontend'
   - 'agents'
+allowBuilds:
+  bufferutil: true
+  keccak: true
+  sharp: true
+  unrs-resolver: true
+  utf-8-validate: true
