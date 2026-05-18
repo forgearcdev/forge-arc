@@ -6,10 +6,11 @@
  * straight into recharts.
  *
  * Strategy:
- *   1. `getLogs` against the JobEscrow address, filtered to the
- *      PaymentReleased event, scanning from `JOB_ESCROW_DEPLOY_BLOCK` to
- *      `latest`. Pinning fromBlock to deploy avoids scanning 42M+ irrelevant
- *      blocks on every page load.
+ *   1. `getLogsChunked` walks the JobEscrow address from
+ *      `JOB_ESCROW_DEPLOY_BLOCK` to `latest` in ≤10,000-block windows —
+ *      required because Arc's public RPC rejects single-call ranges larger
+ *      than that (see lib/get-logs-chunked.ts and the memory note). Chunks
+ *      run with bounded parallelism so a 90k-block range completes in ~1s.
  *   2. Logs only carry block NUMBERS, not timestamps — so fetch each unique
  *      block once and build a `blockNumber → timestamp` map. Done in parallel
  *      with `Promise.all` to keep latency at ~1 RTT regardless of event count.
@@ -24,16 +25,18 @@
  * No wallet required — public RPC reads only, same as useJobStats.
  *
  * @see frontend_contract_integration_plan.md (memory) — Phase 4c.
+ * @see learning_arc_rpc_getlogs_10k_limit.md (memory) — why we chunk.
  */
 
 import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
-import { parseAbiItem, type Log } from "viem";
+import { parseAbiItem } from "viem";
 import {
   CHAIN_ID,
   CONTRACT_ADDRESSES,
   JOB_ESCROW_DEPLOY_BLOCK,
 } from "@/lib/contracts";
+import { getLogsChunked } from "@/lib/get-logs-chunked";
 
 /**
  * Event signature lifted verbatim from `src/JobEscrow.sol`:
@@ -62,6 +65,11 @@ export interface UsePaymentHistoryResult {
   data: DailyVolumePoint[] | null;
   isLoading: boolean;
   isError: boolean;
+  /**
+   * Imperatively re-run the underlying query — used by the chart's "Retry"
+   * link in the error state so users can recover without a full page reload.
+   */
+  refetch: () => void;
 }
 
 /**
@@ -108,7 +116,12 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
       const client = publicClient!;
 
       // ── 1. Fetch every PaymentReleased ever emitted ─────────────────
-      const logs = await client.getLogs({
+      //
+      // Chunked because the Arc public RPC caps eth_getLogs at 10,000
+      // blocks per call. The helper handles range splitting, snapshot
+      // pinning of 'latest', and bounded parallelism internally.
+      const logs = await getLogsChunked({
+        publicClient: client,
         address: CONTRACT_ADDRESSES.jobEscrow,
         event: PAYMENT_RELEASED_EVENT,
         fromBlock: JOB_ESCROW_DEPLOY_BLOCK,
@@ -140,12 +153,7 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
       // mid-aggregation would lose precision past ~9 trillion microUSDC
       // (~9M USDC). Unlikely today, but cheap to do correctly now.
       const dailyMicro = new Map<string, bigint>();
-      for (const log of logs as Log<
-        bigint,
-        number,
-        false,
-        typeof PAYMENT_RELEASED_EVENT
-      >[]) {
+      for (const log of logs) {
         const timestamp = timestampByBlock.get(log.blockNumber!);
         if (timestamp == null) continue; // shouldn't happen — defensive guard
         const dateKey = toUtcDateKey(timestamp);
@@ -176,5 +184,11 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
     data: query.data ?? null,
     isLoading: query.isLoading,
     isError: query.isError,
+    // Wrap refetch so callers can pass it straight to onClick without
+    // exposing the underlying React Query promise (which they shouldn't
+    // need to await).
+    refetch: () => {
+      void query.refetch();
+    },
   };
 }

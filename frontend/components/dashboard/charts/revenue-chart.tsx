@@ -3,13 +3,22 @@
 /**
  * USDC Volume chart — live PaymentReleased events from JobEscrow.
  *
- * Three render branches:
+ * Five mutually-exclusive render branches:
  *   - loading: muted skeleton placeholder matching the chart's footprint
+ *   - error: same footprint, friendly summary + a "Retry" link that
+ *     refetches the underlying query without a full page reload. We
+ *     deliberately do NOT surface the raw RPC error message — public-RPC
+ *     errors are noisy and unhelpful to end users.
  *   - empty (0 events): "be the first" CTA, no chart frame
  *   - sparse (1 day of activity): show the lone data point as a headline
  *     rather than a degenerate single-segment area chart (recharts can't
  *     draw a meaningful trend from one point)
  *   - normal (≥2 days): the actual AreaChart
+ *
+ * Loading and error are kept distinct (early in dev we collapsed them into
+ * one skeleton branch — that hid a real RPC failure mode for a while; see
+ * memory/learning_arc_rpc_getlogs_10k_limit.md). Now they each have their
+ * own visual treatment.
  *
  * Decision: do NOT zero-pad missing days. If a day has no payments, it is
  * simply absent from the series. That's honest — gaps in the timeline
@@ -30,16 +39,38 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { usePaymentHistory } from "@/hooks/use-payment-history";
 
 export function RevenueChart() {
-  const { data, isLoading, isError } = usePaymentHistory();
+  const { data, isLoading, isError, refetch } = usePaymentHistory();
 
   const renderBody = () => {
-    // Treat error like loading — keep the visual layout stable. We could
-    // surface a retry button later; for now the user is shielded from raw
-    // RPC failures the same way the metric cards are.
-    if (isLoading || isError) {
+    // Loading first — `isLoading` is true on the very first fetch only.
+    // Subsequent refetches (e.g. after pressing Retry) keep `isLoading`
+    // false and we'll re-enter the error branch if the retry also fails,
+    // which is the right behavior — we don't want the skeleton flashing
+    // back every time the user clicks Retry.
+    if (isLoading) {
       return (
         <div className="h-[280px] flex items-center justify-center">
           <Skeleton className="h-[240px] w-full bg-secondary" />
+        </div>
+      );
+    }
+
+    if (isError) {
+      return (
+        <div className="h-[280px] flex flex-col items-center justify-center text-center px-6">
+          <p className="text-sm text-muted-foreground">
+            Couldn&apos;t load payment history.
+          </p>
+          <p className="text-xs text-muted-foreground/70 mt-2 max-w-xs">
+            The RPC node may be busy or temporarily unreachable.
+          </p>
+          <button
+            type="button"
+            onClick={refetch}
+            className="mt-3 text-xs text-accent hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+          >
+            Retry
+          </button>
         </div>
       );
     }
