@@ -76,6 +76,31 @@ export interface JobStats {
   uniqueAgents: number;
   /** Total jobs ever created (sum of all status buckets). */
   totalJobs: number;
+  /**
+   * The normalized, jobId-stamped list of every job we successfully read.
+   * Exposed alongside the aggregates so consumers like `useRecentJobs`
+   * don't need to refetch — they can layer (e.g. creation timestamps from
+   * `JobCreated` event logs) on top of this canonical list.
+   *
+   * Order: ascending by `jobId` (the order we iterated). Callers that want
+   * "newest first" should sort by `jobId` descending.
+   */
+  jobs: NormalizedJob[];
+}
+
+/**
+ * A `JobEscrow.getJob` result, normalized: the raw struct plus the `jobId`
+ * we used to query it (the contract doesn't echo jobId back). `bounty` is
+ * renamed to `bountyMicro` so it's obvious this is USDC microunits.
+ */
+export interface NormalizedJob {
+  jobId: bigint;
+  client: `0x${string}`;
+  expiredAt: bigint;
+  status: JobStatus;
+  agentId: bigint;
+  bountyMicro: bigint;
+  deliverableURI: string;
 }
 
 export interface UseJobStatsResult {
@@ -160,6 +185,7 @@ export function useJobStats(): UseJobStatsResult {
         totalEscrowedMicro: 0n,
         uniqueAgents: 0,
         totalJobs: 0,
+        jobs: [],
       };
     }
 
@@ -174,16 +200,31 @@ export function useJobStats(): UseJobStatsResult {
     let submitted = 0;
     const agentIds = new Set<string>(); // Set<bigint> doesn't dedupe properly across instances — stringify
     let totalJobs = 0;
+    const normalized: NormalizedJob[] = [];
 
-    for (const entry of jobsData) {
+    for (let i = 0; i < jobsData.length; i++) {
+      const entry = jobsData[i];
       if (entry.status !== "success" || entry.result == null) continue;
       // wagmi's per-call inference loses some precision in heterogeneous
       // multi-read arrays — cast to the known struct shape. Type is exactly
       // what JobEscrow.getJob returns per src/JobEscrow.sol.
       const job = entry.result as unknown as JobStruct;
+      // `jobIdList[i]` because we built that array as `1..nextJobId` in the
+      // same order we built `contracts`. wagmi preserves request → response
+      // ordering, so index `i` maps cleanly back to the jobId we queried.
+      const jobId = jobIdList[i];
 
       totalJobs++;
       agentIds.add(job.agentId.toString());
+      normalized.push({
+        jobId,
+        client: job.client,
+        expiredAt: job.expiredAt,
+        status: job.status as JobStatus,
+        agentId: job.agentId,
+        bountyMicro: job.bounty,
+        deliverableURI: job.deliverableURI,
+      });
 
       switch (job.status) {
         case JobStatus.Completed:
@@ -227,8 +268,9 @@ export function useJobStats(): UseJobStatsResult {
       totalEscrowedMicro,
       uniqueAgents: agentIds.size,
       totalJobs,
+      jobs: normalized,
     };
-  }, [nextJobIdLoading, nextJobId, jobsData]);
+  }, [nextJobIdLoading, nextJobId, jobsData, jobIdList]);
 
   return {
     stats,
