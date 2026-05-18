@@ -63,6 +63,17 @@ export interface DailyVolumePoint {
 
 export interface UsePaymentHistoryResult {
   data: DailyVolumePoint[] | null;
+  /**
+   * Count of `PaymentReleased` events emitted in the last 24 hours, computed
+   * fresh on every hook call from cached event timestamps. `null` while the
+   * query is loading; `0` once the query resolves with no recent payments.
+   *
+   * Why expose this here rather than in `useJobStats`: `complete()` emits
+   * BOTH `PaymentReleased` (this contract) and `NewFeedback` (the reputation
+   * registry) in the same transaction — they're 1:1. Reading from the data
+   * we've already fetched for the chart avoids a second RPC round trip.
+   */
+  completed24h: number | null;
   isLoading: boolean;
   isError: boolean;
   /**
@@ -70,6 +81,22 @@ export interface UsePaymentHistoryResult {
    * link in the error state so users can recover without a full page reload.
    */
   refetch: () => void;
+}
+
+/**
+ * Internal shape stored in the React Query cache. Holds both the
+ * pre-aggregated daily series and the raw event timestamps; consumers that
+ * need a rolling time-window (e.g. "last 24h") read from the raw list and
+ * the chart reads from the daily rollup.
+ */
+interface PaymentHistoryQueryData {
+  daily: DailyVolumePoint[];
+  /**
+   * One entry per `PaymentReleased` event, in unix seconds. Stored as
+   * `number` (not `bigint`) because we only ever filter/compare against
+   * `Date.now()`, which is itself a `number`. Safe well into the year ~287396.
+   */
+  paymentSecondsList: number[];
 }
 
 /**
@@ -105,7 +132,7 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
   // wallet is currently on — matches the convention from useJobStats.
   const publicClient = usePublicClient({ chainId: CHAIN_ID });
 
-  const query = useQuery<DailyVolumePoint[]>({
+  const query = useQuery<PaymentHistoryQueryData>({
     // `chainId` in the key makes mainnet/testnet caches independent.
     queryKey: ["payment-history", CHAIN_ID, CONTRACT_ADDRESSES.jobEscrow],
     // The query runs only once a public client exists. During the initial SSR
@@ -128,7 +155,7 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
         toBlock: "latest",
       });
 
-      if (logs.length === 0) return [];
+      if (logs.length === 0) return { daily: [], paymentSecondsList: [] };
 
       // ── 2. Resolve unique block timestamps in parallel ──────────────
       //
@@ -147,22 +174,28 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
         blocks.map((b) => [b.number, b.timestamp]),
       );
 
-      // ── 3. Bucket events by UTC day, summing amounts in microunits ──
+      // ── 3. Bucket events by UTC day + collect raw timestamps ────────
       //
       // Microunits stay bigint until the very end — converting to Number
       // mid-aggregation would lose precision past ~9 trillion microUSDC
       // (~9M USDC). Unlikely today, but cheap to do correctly now.
+      //
+      // `paymentSecondsList` is the raw timestamp stream consumers need for
+      // rolling-window analytics (e.g. "completed in last 24h"). One entry
+      // per log so it counts events, not days.
       const dailyMicro = new Map<string, bigint>();
+      const paymentSecondsList: number[] = [];
       for (const log of logs) {
         const timestamp = timestampByBlock.get(log.blockNumber!);
         if (timestamp == null) continue; // shouldn't happen — defensive guard
         const dateKey = toUtcDateKey(timestamp);
         const amount = log.args.amount ?? 0n;
         dailyMicro.set(dateKey, (dailyMicro.get(dateKey) ?? 0n) + amount);
+        paymentSecondsList.push(Number(timestamp));
       }
 
       // ── 4. Emit sorted array of points ──────────────────────────────
-      const points: DailyVolumePoint[] = Array.from(dailyMicro.entries())
+      const daily: DailyVolumePoint[] = Array.from(dailyMicro.entries())
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([date, volumeMicro]) => ({
           date,
@@ -172,7 +205,7 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
           volumeMicro,
         }));
 
-      return points;
+      return { daily, paymentSecondsList };
     },
     // 30s staleness — chart refetches on focus but doesn't hammer the RPC
     // during a single navigation session. Volume changes slowly relative to
@@ -180,8 +213,20 @@ export function usePaymentHistory(): UsePaymentHistoryResult {
     staleTime: 30_000,
   });
 
+  // Compute the 24h rolling count fresh on every render. Cheap O(n) over a
+  // small array, and avoids the staleness problem we'd have if we baked
+  // `Date.now()` into the cached value at query-fetch time.
+  let completed24h: number | null = null;
+  if (query.data) {
+    const cutoffSec = Math.floor(Date.now() / 1000) - 24 * 3600;
+    completed24h = query.data.paymentSecondsList.filter(
+      (s) => s >= cutoffSec,
+    ).length;
+  }
+
   return {
-    data: query.data ?? null,
+    data: query.data?.daily ?? null,
+    completed24h,
     isLoading: query.isLoading,
     isError: query.isError,
     // Wrap refetch so callers can pass it straight to onClick without

@@ -47,8 +47,25 @@ export interface JobStats {
    * be 0/0 = NaN) — UI should render an em-dash in that case.
    */
   successRatePercent: number | null;
-  /** Count of jobs currently in Funded or Submitted state. */
+  /**
+   * Count of jobs currently in Funded or Submitted state.
+   * Kept as a convenience alias for `funded + submitted` so the overview
+   * cards don't have to do the math.
+   */
   activeJobs: number;
+  /** Count of jobs in Funded status (escrow funded, agent has not yet submitted). */
+  funded: number;
+  /** Count of jobs in Submitted status (agent submitted, awaiting client review). */
+  submitted: number;
+  /**
+   * Sum of `bounty` for jobs that still have funds locked in escrow —
+   * i.e. Funded + Submitted. Completed/Rejected/Expired jobs no longer
+   * hold escrow (Completed paid out, Rejected/Expired refunded).
+   *
+   * In USDC microunits (6 decimals). PipelineOverview's "Total Escrowed"
+   * stat reads from here.
+   */
+  totalEscrowedMicro: bigint;
   /**
    * Count of distinct `agentId` values across ALL jobs we've seen. This is
    * the Forge-scoped "registered agents" metric — only counts agents who've
@@ -138,6 +155,9 @@ export function useJobStats(): UseJobStatsResult {
         totalPaidMicro: 0n,
         successRatePercent: null,
         activeJobs: 0,
+        funded: 0,
+        submitted: 0,
+        totalEscrowedMicro: 0n,
         uniqueAgents: 0,
         totalJobs: 0,
       };
@@ -146,10 +166,12 @@ export function useJobStats(): UseJobStatsResult {
     if (!jobsData) return null;
 
     let totalPaidMicro = 0n;
+    let totalEscrowedMicro = 0n;
     let completed = 0;
     let rejected = 0;
     let expired = 0;
-    let active = 0;
+    let funded = 0;
+    let submitted = 0;
     const agentIds = new Set<string>(); // Set<bigint> doesn't dedupe properly across instances — stringify
     let totalJobs = 0;
 
@@ -175,8 +197,16 @@ export function useJobStats(): UseJobStatsResult {
           expired++;
           break;
         case JobStatus.Funded:
+          // Bounty is still in escrow until the agent submits + client
+          // approves (→ paid) or expiry/refund (→ released back to client).
+          totalEscrowedMicro += job.bounty;
+          funded++;
+          break;
         case JobStatus.Submitted:
-          active++;
+          // Submitted = bounty STILL escrowed; client hasn't called
+          // complete() or rejected yet.
+          totalEscrowedMicro += job.bounty;
+          submitted++;
           break;
         // JobStatus.None means an unused jobId slot — shouldn't happen since
         // we iterate 1..nextJobId, but ignoring it is the safe behavior.
@@ -191,7 +221,10 @@ export function useJobStats(): UseJobStatsResult {
     return {
       totalPaidMicro,
       successRatePercent,
-      activeJobs: active,
+      activeJobs: funded + submitted,
+      funded,
+      submitted,
+      totalEscrowedMicro,
       uniqueAgents: agentIds.size,
       totalJobs,
     };
