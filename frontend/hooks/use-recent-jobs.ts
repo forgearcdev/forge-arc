@@ -57,9 +57,24 @@ const JOB_CREATED_EVENT = parseAbiItem(
   "event JobCreated(uint256 indexed jobId, address indexed client, address indexed provider, address evaluator, uint256 expiredAt, address hook)",
 );
 
+/**
+ * Per-jobId metadata pulled from the `JobCreated` log: block timestamp and
+ * the transaction hash that created the job. We keep this as its own type
+ * (rather than inlining `number | null` everywhere) so the queryFn's
+ * intermediate Map stays type-safe.
+ */
+interface CreationMeta {
+  /** Unix seconds when the job was mined. */
+  createdAtSeconds: number;
+  /** Hash of the createJob transaction — used to deep-link to Arcscan. */
+  txHash: `0x${string}`;
+}
+
 export interface RecentJob {
   jobId: bigint;
   agentId: bigint;
+  client: `0x${string}`;
+  expiredAt: bigint;
   bountyMicro: bigint;
   status: JobStatus;
   deliverableURI: string;
@@ -69,6 +84,11 @@ export interface RecentJob {
    * healthy contract, but UI must tolerate it gracefully).
    */
   createdAtSeconds: number | null;
+  /**
+   * Tx hash of the `createJob` call. `null` when the log lookup failed —
+   * same defensive null path as `createdAtSeconds`.
+   */
+  createdTxHash: `0x${string}` | null;
 }
 
 export interface UseRecentJobsResult {
@@ -80,14 +100,18 @@ export interface UseRecentJobsResult {
 }
 
 export interface UseRecentJobsOptions {
-  /** Max rows to return after sorting newest-first. Defaults to 5. */
+  /**
+   * Max rows to return after sorting newest-first. Pass `undefined`
+   * (or omit) for ALL jobs. The dashboard widget passes `5`; the Jobs
+   * section page omits it.
+   */
   limit?: number;
 }
 
 export function useRecentJobs(
   options: UseRecentJobsOptions = {},
 ): UseRecentJobsResult {
-  const { limit = 5 } = options;
+  const { limit } = options;
 
   // Pin to CHAIN_ID — same convention as the other hooks.
   const publicClient = usePublicClient({ chainId: CHAIN_ID });
@@ -107,9 +131,9 @@ export function useRecentJobs(
   // Cached by React Query. Key includes `totalJobs` so the moment a new
   // job lands (useJobStats observes a higher nextJobId), this query
   // invalidates and re-scans for the new event.
-  const timestampQuery = useQuery<Map<string, number>>({
+  const metaQuery = useQuery<Map<string, CreationMeta>>({
     queryKey: [
-      "job-created-timestamps",
+      "job-creation-meta",
       CHAIN_ID,
       CONTRACT_ADDRESSES.jobEscrow,
       totalJobs,
@@ -147,12 +171,16 @@ export function useRecentJobs(
       // Key the result map by stringified jobId — `Map<bigint, ...>` works
       // for identity checks but bigint keys don't survive serialization
       // (React DevTools, JSON-anything). Stringify for portability.
-      const byJobId = new Map<string, number>();
+      const byJobId = new Map<string, CreationMeta>();
       for (const log of logs) {
         const jobId = log.args.jobId;
         const ts = timestampByBlock.get(log.blockNumber!);
-        if (jobId == null || ts == null) continue;
-        byJobId.set(jobId.toString(), Number(ts));
+        const txHash = log.transactionHash;
+        if (jobId == null || ts == null || txHash == null) continue;
+        byJobId.set(jobId.toString(), {
+          createdAtSeconds: Number(ts),
+          txHash,
+        });
       }
       return byJobId;
     },
@@ -170,35 +198,40 @@ export function useRecentJobs(
     // loading state and shows the empty-state CTA.
     if (stats.jobs.length === 0) return [];
 
-    const timestampMap = timestampQuery.data;
-    return stats.jobs
+    const metaMap = metaQuery.data;
+    const merged: RecentJob[] = stats.jobs
       .map((job: NormalizedJob): RecentJob => {
-        const createdAtSeconds =
-          timestampMap?.get(job.jobId.toString()) ?? null;
+        const meta = metaMap?.get(job.jobId.toString());
         return {
           jobId: job.jobId,
           agentId: job.agentId,
+          client: job.client,
+          expiredAt: job.expiredAt,
           bountyMicro: job.bountyMicro,
           status: job.status,
           deliverableURI: job.deliverableURI,
-          createdAtSeconds,
+          createdAtSeconds: meta?.createdAtSeconds ?? null,
+          createdTxHash: meta?.txHash ?? null,
         };
       })
       // bigint comparator: avoid `Number(a - b)` which can overflow for
       // huge ids; return `1 | -1 | 0` explicitly.
-      .sort((a, b) => (a.jobId < b.jobId ? 1 : a.jobId > b.jobId ? -1 : 0))
-      .slice(0, limit);
-  }, [stats, timestampQuery.data, limit]);
+      .sort((a, b) => (a.jobId < b.jobId ? 1 : a.jobId > b.jobId ? -1 : 0));
+
+    // `limit == null` means "all jobs" — used by the Jobs section page.
+    // The dashboard widget passes an explicit `5`.
+    return limit != null ? merged.slice(0, limit) : merged;
+  }, [stats, metaQuery.data, limit]);
 
   return {
     jobs: recentJobs,
     // Loading until both the struct read AND the timestamp scan resolve.
     // When totalJobs is 0 the timestamp query is `enabled: false` and stays
     // `isLoading: false`, so this collapses correctly to "not loading."
-    isLoading: statsLoading || (totalJobs > 0 && timestampQuery.isLoading),
-    isError: statsError || timestampQuery.isError,
+    isLoading: statsLoading || (totalJobs > 0 && metaQuery.isLoading),
+    isError: statsError || metaQuery.isError,
     refetch: () => {
-      void timestampQuery.refetch();
+      void metaQuery.refetch();
     },
   };
 }
