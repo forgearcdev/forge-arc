@@ -1,9 +1,10 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 
 import { cn } from "@/lib/utils";
-import type { Section } from "@/app/page";
+import type { Section } from "@/app/app/page";
 import {
   LayoutDashboard,
   Briefcase,
@@ -67,9 +68,16 @@ export function Sidebar({
         collapsed ? "w-[72px]" : "w-[260px]"
       )}
     >
-      {/* Logo */}
+      {/* Logo — clicking returns to the public landing page at `/`. The
+       *  sidebar nav items below remain as state-toggle buttons (they swap
+       *  the active dashboard section, NOT the URL — single-page dashboard
+       *  at /app holds its current state via useState in app/app/page.tsx). */}
       <div className="h-16 flex items-center px-4 border-b border-sidebar-border">
-        <div className="flex items-center gap-3">
+        <Link
+          href="/"
+          aria-label="Back to forge landing page"
+          className="flex items-center gap-3 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent transition-opacity hover:opacity-80"
+        >
           <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-accent/10">
             <ForgeLogo />
           </div>
@@ -81,7 +89,7 @@ export function Sidebar({
           >
             forge
           </span>
-        </div>
+        </Link>
       </div>
 
       {/* Navigation */}

@@ -1,61 +1,47 @@
-"use client";
+/**
+ * Public landing page — the marketing surface at `/`.
+ *
+ * Renders all 12 section components from `components/landing/`. The
+ * actual dashboard application lives at `/app` (see `app/app/page.tsx`)
+ * and is reachable via the "Launch app" CTAs scattered across these
+ * sections (Navigation, Hero, CTA).
+ *
+ * No "use client" here — this file is a pure composition root. Each
+ * landing/* section component carries its own "use client" because
+ * they use `useState` / `useEffect` for entry animations, scroll
+ * listeners, etc.
+ */
 
-import { useState } from "react";
-import { Sidebar } from "@/components/dashboard/sidebar";
-import { Header } from "@/components/dashboard/header";
-import { OverviewSection } from "@/components/dashboard/sections/overview";
-import { PipelineSection } from "@/components/dashboard/sections/pipeline";
-import { CustomersSection } from "@/components/dashboard/sections/customers";
-import { TeamSection } from "@/components/dashboard/sections/team";
-import { SettingsSection } from "@/components/dashboard/sections/settings";
+import { Navigation } from "@/components/landing/navigation";
+import { HeroSection } from "@/components/landing/hero-section";
+import { FeaturesSection } from "@/components/landing/features-section";
+import { HowItWorksSection } from "@/components/landing/how-it-works-section";
+import { InfrastructureSection } from "@/components/landing/infrastructure-section";
+import { MetricsSection } from "@/components/landing/metrics-section";
+import { IntegrationsSection } from "@/components/landing/integrations-section";
+import { SecuritySection } from "@/components/landing/security-section";
+import { DevelopersSection } from "@/components/landing/developers-section";
+import { TestimonialsSection } from "@/components/landing/testimonials-section";
+import { PricingSection } from "@/components/landing/pricing-section";
+import { CtaSection } from "@/components/landing/cta-section";
+import { FooterSection } from "@/components/landing/footer-section";
 
-export type Section = "overview" | "pipeline" | "deals" | "customers" | "team" | "settings";
-
-export default function Dashboard() {
-  const [activeSection, setActiveSection] = useState<Section>("overview");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  const renderSection = () => {
-    switch (activeSection) {
-      case "overview":
-        return <OverviewSection />;
-      case "pipeline":
-      case "deals":
-        return <PipelineSection />;
-      case "customers":
-        return <CustomersSection />;
-      case "team":
-        return <TeamSection />;
-      case "settings":
-        return <SettingsSection />;
-      default:
-        return <OverviewSection />;
-    }
-  };
-
+export default function Home() {
   return (
-    <div className="flex min-h-screen bg-background">
-      <Sidebar
-        activeSection={activeSection}
-        onSectionChange={setActiveSection}
-        collapsed={sidebarCollapsed}
-        onCollapsedChange={setSidebarCollapsed}
-      />
-      <div
-        className={`flex-1 flex flex-col transition-all duration-300 ease-out ${
-          sidebarCollapsed ? "ml-[72px]" : "ml-[260px]"
-        }`}
-      >
-        <Header activeSection={activeSection} />
-        <main className="flex-1 p-6 overflow-auto">
-          <div
-            key={activeSection}
-            className="animate-in fade-in slide-in-from-bottom-4 duration-500"
-          >
-            {renderSection()}
-          </div>
-        </main>
-      </div>
-    </div>
+    <main className="relative min-h-screen overflow-x-hidden noise-overlay">
+      <Navigation />
+      <HeroSection />
+      <FeaturesSection />
+      <HowItWorksSection />
+      <InfrastructureSection />
+      <MetricsSection />
+      <IntegrationsSection />
+      <SecuritySection />
+      <DevelopersSection />
+      <TestimonialsSection />
+      <PricingSection />
+      <CtaSection />
+      <FooterSection />
+    </main>
   );
 }
