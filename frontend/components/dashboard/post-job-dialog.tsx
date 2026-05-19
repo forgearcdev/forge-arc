@@ -504,7 +504,10 @@ export function PostJobDialog({ open, onOpenChange }: PostJobDialogProps) {
     // approveReceipt success → fall through to idle (allowance refetch
     // will pick up the new value and the button label will flip).
     // ── approve mid-flight ─────────────────────────────────────────
-    if (approveTxHash) {
+    // approveTxHash persists after the receipt arrives, so we must also
+    // require approveReceipt to be undefined — otherwise we return to
+    // confirming_approval forever post-success. See 2026-05-19 bug.
+    if (approveTxHash && !approveReceipt) {
       return { kind: "confirming_approval", txHash: approveTxHash };
     }
     if (isApprovePending) return { kind: "approving" };
