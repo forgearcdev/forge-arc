@@ -5,11 +5,11 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { RevenueChart } from "@/components/dashboard/charts/revenue-chart";
 import { PipelineOverview } from "@/components/dashboard/charts/pipeline-overview";
 import { RecentDeals } from "@/components/dashboard/recent-deals";
-// Phase 4e: TopPerformers (Top Agents) is hidden until 4f wires it to
-// live ReputationRegistry data. Leaving the component file in place as a
-// starting point — incomplete features should be invisible, not
-// distracting.
-// import { TopPerformers } from "@/components/dashboard/top-performers";
+// Phase 6.2: TopPerformers re-enabled. The component is now a pure
+// presentation layer over `useAgents` (which already computes
+// `usdcEarnedMicro` + `jobsCompleted` per agentId — see
+// hooks/use-agents.ts:199-212). No new RPC reads, no new hook.
+import { TopPerformers } from "@/components/dashboard/top-performers";
 import { Coins, TrendingUp, Briefcase, Bot } from "lucide-react";
 import { useJobStats } from "@/hooks/use-job-stats";
 
@@ -90,15 +90,15 @@ export function OverviewSection() {
         <PipelineOverview />
       </div>
 
-      {/* Bottom row.
-       *
-       * Phase 4e collapses this to a single-column layout while
-       * TopPerformers is hidden — RecentDeals takes the full width so the
-       * card balances the chart row above. When Phase 4f reintroduces Top
-       * Agents, switch back to `grid-cols-1 lg:grid-cols-2`.
+      {/* Bottom row — two cards side-by-side on desktop, stacked on
+       * mobile. RecentDeals on the left (wider information density),
+       * TopPerformers on the right. Reactivated in Phase 6.2; was
+       * collapsed to single-column during Phase 4e while Top Agents
+       * was hidden.
        */}
-      <div className="grid grid-cols-1 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <RecentDeals />
+        <TopPerformers />
       </div>
     </div>
   );
