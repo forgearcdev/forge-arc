@@ -51,6 +51,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RequiresWallet } from "@/components/requires-wallet";
+import { PostJobDialog } from "@/components/dashboard/post-job-dialog";
 import {
   useRecentJobs,
   type RecentJob,
@@ -151,6 +152,12 @@ export function PipelineSection() {
   const { jobs, isLoading, isError, refetch } = useRecentJobs();
   const [filter, setFilter] = useState<Filter>("all");
 
+  // Phase 5g: controlled dialog state for Post Job. Same sibling-not-nested
+  // pattern as the Register Agent flow — RequiresWallet wraps the trigger
+  // button (so disconnected clicks open the connect modal), and the
+  // PostJobDialog lives next to it as a controlled component.
+  const [postJobOpen, setPostJobOpen] = useState(false);
+
   // null while loading; empty array when zero jobs exist (handled separately
   // from filtered-empty so we can show the "be the first" CTA only at the
   // very beginning).
@@ -176,13 +183,7 @@ export function PipelineSection() {
         <RequiresWallet message="Connect wallet to post a job">
           <button
             type="button"
-            onClick={() => {
-              // Phase 5f will swap this for a real createJob modal +
-              // contract write. Console log + alert combo keeps it
-              // discoverable while the placeholder ships.
-              // eslint-disable-next-line no-console
-              console.log("Phase 5f placeholder — Post Job clicked");
-            }}
+            onClick={() => setPostJobOpen(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-accent-foreground hover:bg-accent/90 transition-colors text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
@@ -190,6 +191,12 @@ export function PipelineSection() {
           </button>
         </RequiresWallet>
       </div>
+
+      {/* Dialog renders as a portal — DOM position doesn't matter. Mint
+       *  button is a no-op placeholder in Phase 5g.2; Phase 5g.3 wires
+       *  useWriteContract for USDC.approve + JobEscrow.createJob plus
+       *  the allowance pre-flight inside the dialog component. */}
+      <PostJobDialog open={postJobOpen} onOpenChange={setPostJobOpen} />
 
       {/* Filter chips + count */}
       <div className="flex items-center flex-wrap gap-2">
