@@ -49,6 +49,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RequiresWallet } from "@/components/requires-wallet";
+import { RegisterAgentDialog } from "@/components/dashboard/register-agent-dialog";
 import { useAgents, type Agent } from "@/hooks/use-agents";
 import { CONTRACT_ADDRESSES } from "@/lib/contracts";
 import { arcTestnet } from "@/lib/chains";
@@ -91,6 +92,14 @@ export function CustomersSection() {
   const { agents, isLoading, isError, refetch } = useAgents();
   const count = agents?.length ?? null;
 
+  // Phase 5f: controlled dialog state. The trigger button below opens the
+  // RegisterAgentDialog (when wallet connected) or RainbowKit's connect
+  // modal (when disconnected, via RequiresWallet). Keeping the state up
+  // here so the dialog and the trigger live as siblings, not nested —
+  // see the comment block at the top of register-agent-dialog.tsx for
+  // why RequiresWallet can't wrap a dialog-containing element directly.
+  const [registerOpen, setRegisterOpen] = useState(false);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -105,13 +114,7 @@ export function CustomersSection() {
         <RequiresWallet message="Connect wallet to register an agent">
           <button
             type="button"
-            onClick={() => {
-              // Phase 5e will swap this for a real IdentityRegistry mint
-              // flow. Keep this discoverable in console so it's obvious
-              // the wiring is pending.
-              // eslint-disable-next-line no-console
-              console.log("Phase 5e placeholder — Register Agent clicked");
-            }}
+            onClick={() => setRegisterOpen(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-accent-foreground hover:bg-accent/90 transition-colors text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
@@ -119,6 +122,15 @@ export function CustomersSection() {
           </button>
         </RequiresWallet>
       </div>
+
+      {/* Dialog renders as a portal — its DOM position doesn't matter for
+       *  layout; placing the JSX next to its trigger keeps the wiring
+       *  legible. Mint button is still a no-op placeholder in Phase 5f.2;
+       *  Phase 5f.3 wires useWriteContract inside the dialog component. */}
+      <RegisterAgentDialog
+        open={registerOpen}
+        onOpenChange={setRegisterOpen}
+      />
 
       {/* Count badge */}
       {/* Filter to be added when agent count grows (e.g. by "Has earnings"
