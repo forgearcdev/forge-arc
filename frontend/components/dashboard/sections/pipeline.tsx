@@ -27,6 +27,7 @@
  */
 
 import { useState } from "react";
+import { useAccount } from "wagmi";
 import { formatUnits } from "viem";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -53,9 +54,14 @@ import {
 import { RequiresWallet } from "@/components/requires-wallet";
 import { PostJobDialog } from "@/components/dashboard/post-job-dialog";
 import {
+  JobActionDialog,
+  type JobAction,
+} from "@/components/dashboard/job-action-dialog";
+import {
   useRecentJobs,
   type RecentJob,
 } from "@/hooks/use-recent-jobs";
+import { useAgents } from "@/hooks/use-agents";
 import { JobStatus } from "@/hooks/use-job-stats";
 import { arcTestnet } from "@/lib/chains";
 
@@ -607,7 +613,146 @@ function JobDetail({
           fullWidth
         />
       </div>
+
+      {/* Phase 5h: per-job actions. Renders 0-3 buttons depending on
+       *  who's connected vs. (job.client, ownerOf(agentId)) and the
+       *  current status / deadline. Each button opens a JobActionDialog
+       *  with the appropriate `action` prop. Empty if the connected
+       *  wallet has no role on this job — keeps the detail panel quiet
+       *  for read-only viewers. */}
+      <JobActionsBar job={job} />
     </div>
+  );
+}
+
+/* ─── Actions bar — role-aware buttons in the expanded panel ────── */
+
+function JobActionsBar({ job }: { job: RecentJob }) {
+  const { address, isConnected } = useAccount();
+  const { agents } = useAgents();
+  const [openAction, setOpenAction] = useState<JobAction | null>(null);
+
+  // No connected wallet → no actions to show. The detail panel above
+  // already gives the user everything they can do read-only.
+  if (!isConnected || !address) return null;
+
+  // Look up the agent's current owner. useAgents derives its agentId
+  // set from JobEscrow.jobs[].agentId (see
+  // learning_useAgents_aggregation_source.md), so every job's agentId
+  // is present here as long as `agents` has resolved. While agents is
+  // still loading (null), we skip the role checks rather than guessing.
+  if (!agents) return null;
+  const agent = agents.find((a) => a.agentId === job.agentId);
+  const agentOwner = agent?.owner ?? null;
+
+  // Case-insensitive address comparison — same defensive lowercasing
+  // as use-my-activity.ts (wallet sometimes returns mixed-case,
+  // sometimes lower).
+  const isClient = job.client.toLowerCase() === address.toLowerCase();
+  const isAgentOwner =
+    agentOwner != null &&
+    agentOwner.toLowerCase() === address.toLowerCase();
+  const isDualRole = isClient && isAgentOwner;
+  const isExpired = Number(job.expiredAt) * 1000 <= Date.now();
+
+  // Build the visibility table from the file header into a flat list.
+  // Order: action first (matches the natural job lifecycle), then
+  // refund last (terminal recovery).
+  type Visible = {
+    action: JobAction;
+    label: string;
+    /** Optional second-line subtitle for context (e.g. claim-refund). */
+    subtitle?: string;
+    /** Reject gets a destructive variant in the dialog already; we
+     *  mirror that intent in the trigger button too. */
+    variant: "default" | "destructive";
+  };
+
+  const visible: Visible[] = [];
+
+  if (isAgentOwner && job.status === JobStatus.Funded && !isExpired) {
+    visible.push({
+      action: "submit",
+      label: isDualRole ? "Submit work (as agent)" : "Submit work",
+      variant: "default",
+    });
+  }
+  if (isClient && job.status === JobStatus.Submitted) {
+    visible.push({
+      action: "complete",
+      label: isDualRole
+        ? "Mark as complete (as client)"
+        : "Mark as complete",
+      variant: "default",
+    });
+    visible.push({
+      action: "reject",
+      label: isDualRole
+        ? "Reject submission (as client)"
+        : "Reject submission",
+      variant: "destructive",
+    });
+  }
+  if (
+    (job.status === JobStatus.Funded || job.status === JobStatus.Submitted) &&
+    isExpired
+  ) {
+    visible.push({
+      action: "claim-refund",
+      label: "Claim refund",
+      subtitle: "Anyone can claim after the deadline passes.",
+      variant: "default",
+    });
+  }
+
+  if (visible.length === 0) return null;
+
+  return (
+    <>
+      <div className="mt-4 pt-4 border-t border-border space-y-3">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          Actions
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {visible.map((v) => (
+            <button
+              key={v.action}
+              type="button"
+              onClick={() => setOpenAction(v.action)}
+              className={cn(
+                "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                v.variant === "destructive"
+                  ? "bg-destructive/10 text-destructive hover:bg-destructive/15"
+                  : "bg-accent text-accent-foreground hover:bg-accent/90",
+              )}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+        {/* Claim-refund subtitle (rendered once if claim-refund is in
+         *  the visible set). Other actions don't need disambiguation. */}
+        {visible.some((v) => v.action === "claim-refund") && (
+          <p className="text-xs text-muted-foreground">
+            {visible.find((v) => v.action === "claim-refund")!.subtitle}
+          </p>
+        )}
+      </div>
+
+      {/* Render the dialog. openAction === null collapses to closed.
+       *  Each click on a button sets openAction to that action's key
+       *  and the dialog renders the right mode via its `action` prop. */}
+      {openAction !== null && (
+        <JobActionDialog
+          open={openAction !== null}
+          onOpenChange={(next) => {
+            if (!next) setOpenAction(null);
+          }}
+          job={job}
+          action={openAction}
+        />
+      )}
+    </>
   );
 }
 
