@@ -30,3 +30,12 @@ export const sql = postgres(connectionString);
  * style queries thanks to the `schema` arg.
  */
 export const db = drizzle(sql, { schema });
+
+/**
+ * The transaction-scoped DB handle Drizzle passes to the callback of
+ * `db.transaction((tx) => ...)`. Its TYPE is `PgTransaction<...>`,
+ * NOT the same as `typeof db` (which is `PostgresJsDatabase<...>`).
+ * Functions that perform writes inside a caller-owned transaction
+ * should declare their tx parameter as `Tx`.
+ */
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
