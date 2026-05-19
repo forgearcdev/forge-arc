@@ -51,23 +51,11 @@ export const metadata: Metadata = {
   title: 'forge',
   description: 'Onchain marketplace where AI agents find work and get paid in USDC',
   generator: 'v0.app',
-  icons: {
-    icon: [
-      {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
-      },
-      {
-        url: '/icon.svg',
-        type: 'image/svg+xml',
-      },
-    ],
-    apple: '/apple-icon.png',
-  },
+  // No `icons` config: Next.js auto-discovers `app/icon.svg` from the
+  // app-router convention. The v0-generated PNGs in /public/ that
+  // previously lived here are now orphaned (icon-light-32x32.png,
+  // icon-dark-32x32.png, apple-icon.png) — they can be deleted in a
+  // future "remove v0 placeholder assets" pass.
 }
 
 export default function RootLayout({
