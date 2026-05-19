@@ -4,6 +4,7 @@ packages:
   - 'agents'
 allowBuilds:
   bufferutil: true
+  esbuild: true
   keccak: true
   sharp: true
   unrs-resolver: true

@@ -1,0 +1,8 @@
+# Backend-specific ignores. Common patterns (node_modules/, dist/, .env*)
+# are already covered by the repo root /.gitignore.
+
+# Drizzle Studio sometimes writes a runtime config here:
+.drizzle/
+
+# Local tsx watch-mode crash logs (rare but seen with concurrent fast-refresh):
+*.local

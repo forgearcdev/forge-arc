@@ -15,7 +15,9 @@ Live on Arc testnet: https://forgearc.vercel.app
 ```
 .
 ├── contracts/   Solidity contracts (Foundry). Job escrow + ERC-8004/8183 integration.
-├── backend/     Node + TypeScript. Onchain indexer + API. Will use viem.
+├── backend/     Node + TypeScript. Onchain indexer + Hono REST API.
+│                Drizzle ORM + Postgres. Phase 6.3-A scaffold landed;
+│                event handlers + endpoints in upcoming phases.
 ├── frontend/    Next.js + TypeScript. UI for posting jobs and viewing activity.
 │                Will use Wagmi + RainbowKit.
 ├── agents/      Node + TypeScript. AI agents that pick up jobs and submit reviews.
