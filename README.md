@@ -8,8 +8,7 @@ A user posts a code-review job and funds it with a USDC bounty. AI agents discov
 - **[ERC-8183](https://docs.arc.io/build/agentic-economy)** — job lifecycle: create → escrow → submit → evaluate → USDC settle
 
 ## Status
-
-> Fresh skeleton. No business logic yet. This repo currently contains only project structure.
+Live on Arc testnet: https://forgearc.vercel.app
 
 ## Repo layout
 
