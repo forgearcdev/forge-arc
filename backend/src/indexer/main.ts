@@ -1,17 +1,18 @@
 /**
- * Indexer entry point — Phase 6.3-C.1 (loop scaffold).
+ * Indexer entry point.
  *
  * Responsibilities:
- *   - Set up structured logging.
  *   - Install SIGTERM/SIGINT handlers for graceful shutdown.
  *   - Drive `pollOnce` on a configurable interval.
- *   - Categorize errors: IndexerDatabaseError → fatal (process.exit);
- *     anything else → retriable with exponential backoff.
+ *   - Categorize errors:
+ *       IndexerDatabaseError     → FATAL, process.exit(1)
+ *       TransientConnectionError → retriable with exponential backoff
+ *       (anything else)          → retriable with exponential backoff
  *
- * Phase C.1 status: handlers + log fetch are TODO stubs inside
- * `poller.ts`. This file is otherwise production-shape — signal
- * handling, error categorization, backoff, and DB cleanup are all
- * real. Phase C.5 is the first runnable end-to-end target.
+ * Phase 6.3-D update: transient connection errors (ECONNRESET et al.)
+ * are no longer classified as fatal — see `errors.ts`. Common on Neon
+ * post-auto-pause; the first query after compute wake-up fails, the
+ * retry succeeds.
  *
  * Run via:
  *   pnpm dev   — tsx watch (auto-reload on save)
@@ -20,8 +21,13 @@
 
 import "dotenv/config";
 import { pollOnce, type PollResult } from "./poller.js";
-import { IndexerDatabaseError } from "./cursor.js";
+import {
+  IndexerDatabaseError,
+  TransientConnectionError,
+  isNeonDatabaseUrl,
+} from "./errors.js";
 import { sql } from "../db/client.js";
+import { log } from "./log.js";
 
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? "5000");
 
@@ -31,20 +37,6 @@ const MAX_BACKOFF_MS = 60_000;
 /** AbortController used to wake `sleep` early when a shutdown signal arrives. */
 const ac = new AbortController();
 let shuttingDown = false;
-
-/* ─── Tiny tagged logger ──────────────────────────────────────────── */
-
-type LogLevel = "info" | "warn" | "error";
-
-function log(level: LogLevel, msg: string, extra?: unknown): void {
-  const ts = new Date().toISOString();
-  const line = `[indexer] [${ts}] [${level}] ${msg}`;
-  if (extra !== undefined) {
-    console.log(line, extra);
-  } else {
-    console.log(line);
-  }
-}
 
 /* ─── Sleep that wakes on AbortSignal ─────────────────────────────── */
 
@@ -105,20 +97,26 @@ async function loop(): Promise<void> {
         );
       }
     } catch (err) {
-      // DB errors are fatal per the project design ("fail loud, never
-      // skip events"). Anything else (RPC, decode, network) is assumed
-      // transient and retried with exponential backoff.
+      // Three buckets, in order:
+      //   1. IndexerDatabaseError    → FATAL (real DB problem, operator
+      //                                intervention required)
+      //   2. TransientConnectionError → retriable (Neon auto-pause,
+      //                                 brief network blip)
+      //   3. anything else            → retriable (RPC error, decode
+      //                                 failure, etc.)
       if (err instanceof IndexerDatabaseError) {
         log("error", "DB error — fatal, exiting", err);
         process.exit(1);
       }
 
+      const isTransientConn = err instanceof TransientConnectionError;
       consecutiveErrors++;
       const exponent = Math.min(consecutiveErrors, 6); // cap at 2^6 multiplier
       const backoff = Math.min(MAX_BACKOFF_MS, POLL_INTERVAL_MS * 2 ** exponent);
       log(
         "warn",
-        `transient error (attempt ${consecutiveErrors}), retrying in ${backoff}ms`,
+        `${isTransientConn ? "transient connection" : "transient"} error ` +
+          `(attempt ${consecutiveErrors}), retrying in ${backoff}ms`,
         err,
       );
       await sleep(backoff, ac.signal);
@@ -144,10 +142,18 @@ async function loop(): Promise<void> {
 /* ─── Entry ────────────────────────────────────────────────────────── */
 
 async function main(): Promise<void> {
-  log("info", "starting indexer (Phase 6.3-C complete)");
-  log("info", `  POLL_INTERVAL_MS = ${POLL_INTERVAL_MS}`);
-  log("info", `  ARC_RPC_URL      = ${process.env.ARC_RPC_URL ?? "(default)"}`);
-  log("info", `  DATABASE_URL     = ${process.env.DATABASE_URL ? "set" : "MISSING"}`);
+  log("info", "starting indexer (Phase 6.3-D hardened)");
+  log("info", `  POLL_INTERVAL_MS      = ${POLL_INTERVAL_MS}`);
+  log("info", `  MAX_RPC_REQS_PER_SEC  = ${process.env.MAX_RPC_REQS_PER_SEC ?? "30 (default)"}`);
+  log("info", `  ARC_RPC_URL           = ${process.env.ARC_RPC_URL ?? "(default)"}`);
+  log("info", `  DATABASE_URL          = ${process.env.DATABASE_URL ? "set" : "MISSING"}`);
+  if (isNeonDatabaseUrl(process.env.DATABASE_URL)) {
+    log(
+      "info",
+      "  Neon database detected — expect first query after compute auto-pause " +
+        "to fail with ECONNRESET; the indexer retries automatically.",
+    );
+  }
   setupSignalHandlers();
   await loop();
 }

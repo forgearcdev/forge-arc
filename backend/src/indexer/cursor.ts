@@ -8,11 +8,11 @@
  * blocks forever (good — idempotent handlers cope) or skip blocks
  * (bad — events lost).
  *
- * **Failure policy.** Every DB call is wrapped in a try/catch that
- * rethrows as `IndexerDatabaseError`. The main loop catches that
- * specific class and exits the process — DB problems are loud,
- * NOT silently retried. Rationale: an indexer that "works fine but
- * stopped writing" is the worst failure mode possible.
+ * **Failure policy.** Every DB call wraps its error through
+ * `classifyDbError` (see `./errors.ts`), which decides whether to
+ * throw `IndexerDatabaseError` (fatal — exit) or
+ * `TransientConnectionError` (retriable — backoff). Connection
+ * resets (Neon auto-pause, DNS hiccups) are NOT fatal.
  *
  * **Initial cursor.** If no row exists in `indexer_meta`, we return
  * `START_BLOCK - 1n` (env-driven, defaults to the JobEscrow deploy
@@ -26,21 +26,9 @@ import { eq } from "drizzle-orm";
 import { db, type Tx } from "../db/client.js";
 import { indexerMeta } from "../db/schema.js";
 import { JOB_ESCROW_DEPLOY_BLOCK } from "../lib/contracts.js";
+import { classifyDbError } from "./errors.js";
 
 const CURSOR_KEY = "lastProcessedBlock";
-
-/**
- * Tagged error class for DB-layer failures. The main loop uses
- * `instanceof IndexerDatabaseError` to distinguish "fatal — exit"
- * from "transient — retry with backoff". Anything not tagged
- * with this class is assumed retriable.
- */
-export class IndexerDatabaseError extends Error {
-  override name = "IndexerDatabaseError";
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-  }
-}
 
 /**
  * The block we should treat as "already processed" before any polling.
@@ -75,9 +63,7 @@ export async function getCursor(): Promise<bigint> {
     }
     return BigInt(row.value);
   } catch (err) {
-    throw new IndexerDatabaseError("Failed to read cursor from indexer_meta", {
-      cause: err,
-    });
+    throw classifyDbError(err, "Failed to read cursor from indexer_meta");
   }
 }
 
@@ -105,9 +91,9 @@ export async function setCursorInTx(
         set: { value: blockNumber.toString(), updatedAt: new Date() },
       });
   } catch (err) {
-    throw new IndexerDatabaseError(
+    throw classifyDbError(
+      err,
       `Failed to write cursor=${blockNumber.toString()} to indexer_meta`,
-      { cause: err },
     );
   }
 }

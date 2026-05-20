@@ -26,6 +26,7 @@ import { publicClient } from "./rpc.js";
 import { getCursor, setCursorInTx } from "./cursor.js";
 import { getLogsChunked } from "./logs.js";
 import { dispatchBatchInTx } from "./dispatch.js";
+import { rpcRateLimit } from "./rate-limit.js";
 
 export interface PollResult {
   /** Cursor at start of this poll (blocks already processed). */
@@ -51,6 +52,9 @@ export async function pollOnce(): Promise<PollResult> {
   const fromCursor = await getCursor();
 
   // Chain head — RPC. Failure → retriable.
+  // Rate-limited for consistency with logs.ts even though this is
+  // one call per poll iteration (cheap).
+  await rpcRateLimit().acquire();
   const chainHead = await publicClient.getBlockNumber();
 
   // Caught up? Cheap fast path.

@@ -12,7 +12,7 @@
 
 import { eq } from "drizzle-orm";
 import { jobs } from "../../db/schema.js";
-import { IndexerDatabaseError } from "../cursor.js";
+import { classifyDbError } from "../errors.js";
 import type { HandlerArgs } from "../dispatch.js";
 
 export async function handleJobCompleted({
@@ -35,9 +35,9 @@ export async function handleJobCompleted({
       })
       .where(eq(jobs.jobId, args.jobId));
   } catch (err) {
-    throw new IndexerDatabaseError(
+    throw classifyDbError(
+      err,
       `UPDATE jobs (status=Completed, jobId=${args.jobId.toString()}) failed`,
-      { cause: err },
     );
   }
 }

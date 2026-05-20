@@ -29,7 +29,7 @@
 import { and, eq } from "drizzle-orm";
 import { getAddress } from "viem";
 import { jobs, payments } from "../../db/schema.js";
-import { IndexerDatabaseError } from "../cursor.js";
+import { classifyDbError, IndexerDatabaseError } from "../errors.js";
 import type { HandlerArgs } from "../dispatch.js";
 
 export async function handlePaymentReleased({
@@ -86,10 +86,13 @@ export async function handlePaymentReleased({
       timestamp: event.log.blockTimestamp,
     });
   } catch (err) {
+    // The handler's own "unknown jobId" guard (above) throws a plain
+    // Error; let it pass through classifyDbError, which will wrap it
+    // as IndexerDatabaseError → fatal (correct — corrupt indexer state).
     if (err instanceof IndexerDatabaseError) throw err;
-    throw new IndexerDatabaseError(
+    throw classifyDbError(
+      err,
       `INSERT payments (jobId=${args.jobId.toString()}) failed`,
-      { cause: err },
     );
   }
 }

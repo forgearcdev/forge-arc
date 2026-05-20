@@ -15,7 +15,7 @@
 
 import { getAddress } from "viem";
 import { jobs } from "../../db/schema.js";
-import { IndexerDatabaseError } from "../cursor.js";
+import { classifyDbError } from "../errors.js";
 import type { HandlerArgs } from "../dispatch.js";
 
 export async function handleJobCreated({
@@ -73,9 +73,9 @@ export async function handleJobCreated({
       })
       .onConflictDoNothing({ target: jobs.jobId });
   } catch (err) {
-    throw new IndexerDatabaseError(
+    throw classifyDbError(
+      err,
       `INSERT jobs (jobId=${args.jobId.toString()}) failed`,
-      { cause: err },
     );
   }
 }

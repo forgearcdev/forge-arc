@@ -21,7 +21,7 @@
 import { eq } from "drizzle-orm";
 import { getAddress, zeroAddress } from "viem";
 import { agents } from "../../db/schema.js";
-import { IndexerDatabaseError } from "../cursor.js";
+import { classifyDbError } from "../errors.js";
 import type { HandlerArgs } from "../dispatch.js";
 
 export async function handleAgentTransfer({
@@ -81,9 +81,9 @@ export async function handleAgentTransfer({
       }
     }
   } catch (err) {
-    throw new IndexerDatabaseError(
+    throw classifyDbError(
+      err,
       `${isMint ? "INSERT" : "UPDATE"} agents (agentId=${agentId.toString()}) failed`,
-      { cause: err },
     );
   }
 }
